@@ -74,6 +74,10 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 /* Google Drive sync */
 .drive-card{overflow:hidden}.drive-status{font-size:11px;color:var(--muted);line-height:1.35;text-align:right;max-width:48%}.drive-connected{color:var(--good);font-weight:700}.drive-error{color:var(--bad);font-weight:700}.drive-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.drive-actions button:first-child{grid-column:1/-1}.drive-actions .btn{margin:0}.sync-progress{display:none;margin-top:11px}.sync-progress.show{display:block}.sync-progress-track{height:7px;border-radius:99px;background:#e8edf4;overflow:hidden}.sync-progress-bar{height:100%;width:0;background:linear-gradient(90deg,#2563eb,#1680ff);border-radius:99px;transition:width .2s}.sync-progress-text{font-size:10px;color:var(--muted);margin-top:5px;display:flex;justify-content:space-between;gap:8px}
 @media(max-width:420px){.drive-actions{grid-template-columns:1fr}.drive-actions button:first-child{grid-column:auto}.drive-status{max-width:45%}}
+
+.detail-modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;position:sticky;top:0;background:#fff;padding:2px 0 10px;z-index:3;border-bottom:1px solid #eef0f3}
+.detail-color-dot{width:12px;height:12px;border-radius:50%;flex:0 0 12px}
+#sheet{max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
 </style>
 </head>
 <body>
@@ -92,7 +96,7 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v11.0.0';
+const APP_VERSION='v13.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -315,6 +319,7 @@ async function deleteRecord(id){
   const r=(db.records||[]).find(x=>x.id===id);
   if(!r)return;
   if(!confirm('确定删除这条历史记录吗？'))return;
+  const detailBehaviorId=r.behaviorId;
   try{
     db.records=db.records.filter(x=>x.id!==id);
     const ids=[r.before,r.after].filter(Boolean);
@@ -329,6 +334,17 @@ async function deleteRecord(id){
       });
     }
     await save();
+
+    // If the record was deleted from the behavior detail modal, refresh that
+    // modal immediately so the record disappears without requiring navigation.
+    const modal=document.getElementById('modal');
+    if(modal && modal.classList.contains('show') && selectedBehavior===detailBehaviorId){
+      const b=db.behaviors.find(x=>x.id===detailBehaviorId);
+      if(b){
+        document.getElementById('sheet').innerHTML=behaviorDetail(detailBehaviorId);
+        return;
+      }
+    }
     render();
   }catch(e){
     alert('删除失败：'+e.message);
@@ -342,7 +358,7 @@ function recordHtml(r){
   return `<div class="record card" data-date="${esc(r.date)}" style="border-left:4px solid ${b.color||'#2563eb'}">
     <div class="row between">
       <button class="behavior-link" onclick="openBehaviorDetail('${b.id}')" style="color:${b.color||'#2563eb'}">${esc(b.icon||'✓')} ${esc(b.name)}</button>
-      <button type="button" class="iconbtn" onclick="event.stopPropagation();deleteRecord('${r.id}')" aria-label="删除">🗑️</button>
+      <button type="button" class="iconbtn" style="position:relative;z-index:20;pointer-events:auto" onclick="event.stopPropagation();deleteRecord('${r.id}')" aria-label="删除">🗑️</button>
     </div>
     <div class="small">${esc(r.date)} ${r.time?esc(r.time):''}</div>
     ${r.note?`<div class="note">${esc(r.note)}</div>`:''}
@@ -667,9 +683,16 @@ function settingsPage(){
 function behaviorDetail(id){
  let b=db.behaviors.find(x=>x.id===id);if(!b)return '';
  let rs=db.records.filter(r=>r.behaviorId===id).sort((a,b)=>b.timestamp-a.timestamp);
- return `<div class="hero" style="background:${color(b)}"><div style="font-size:30px">${esc(b.icon||'✓')}</div><h2>${esc(b.name)}</h2><div style="opacity:.85">${freqText(b)}</div><div class="big">${rs.length}</div><div>累计记录</div></div>
- ${monthlyChart(b)}${yearlyChart(b)}
- <div class="card" style="margin-top:12px"><div class="row between"><b>历史记录</b><span class="small">${rs.length} 次</span></div>${rs.length?rs.map(recordHtml).join(''):'<div class="empty">暂无记录</div>'}</div>`
+ return `<div class="detail-modal">
+   <div class="detail-modal-head">
+     <div class="row" style="min-width:0"><div class="detail-color-dot" style="background:${color(b)}"></div><div><h2 style="margin:0">${esc(b.icon||'✓')} ${esc(b.name)}</h2><div class="small">${freqText(b)}</div></div></div>
+     <button type="button" class="btn" onclick="closeModal()">退出</button>
+   </div>
+   <div class="hero" style="background:${color(b)}"><div style="font-size:30px">${esc(b.icon||'✓')}</div><h2>${esc(b.name)}</h2><div style="opacity:.85">${freqText(b)}</div><div class="big">${rs.length}</div><div>累计记录</div></div>
+   ${monthlyChart(b)}${yearlyChart(b)}
+   <div class="card" style="margin-top:12px"><div class="row between"><b>历史记录</b><span class="small">${rs.length} 次</span></div>${rs.length?rs.map(recordHtml).join(''):'<div class="empty">暂无记录</div>'}</div>
+   <div class="actions"><button type="button" class="btn" onclick="closeModal()">退出详情</button></div>
+ </div>`;
 }
 function openBehaviorDetail(id){
   const b=(db.behaviors||[]).find(x=>x.id===id);
@@ -730,6 +753,24 @@ let driveToken=null,driveTokenExpiresAt=0,driveFileId=null,driveBusy=false,drive
 function driveSetStatus(text,type=''){
   const e=document.getElementById('driveStatus');
   if(e){e.textContent=text;e.className='drive-status '+(type==='ok'?'drive-connected':type==='error'?'drive-error':'')}
+}
+function toast(message){
+  let el=document.getElementById('appToast');
+  if(!el){
+    el=document.createElement('div');
+    el.id='appToast';
+    el.setAttribute('role','status');
+    el.style.cssText='position:fixed;left:50%;bottom:92px;transform:translateX(-50%) translateY(10px);z-index:99999;max-width:calc(100vw - 40px);padding:11px 16px;border-radius:12px;background:rgba(25,25,28,.94);color:#fff;font-size:14px;line-height:1.4;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.2);opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;';
+    document.body.appendChild(el);
+  }
+  el.textContent=String(message||'');
+  el.style.opacity='1';
+  el.style.transform='translateX(-50%) translateY(0)';
+  clearTimeout(window.__pbtToastTimer);
+  window.__pbtToastTimer=setTimeout(()=>{
+    el.style.opacity='0';
+    el.style.transform='translateX(-50%) translateY(10px)';
+  },2200);
 }
 function syncProgress(p,text,show=true){
   const box=document.getElementById('syncProgress');
@@ -840,7 +881,7 @@ async function driveUpload(){
       const ab=await blob.arrayBuffer(),b=enc.encode('\r\n--'+boundary+'--');const all=new Uint8Array(a.byteLength+ab.byteLength+b.byteLength);all.set(a);all.set(new Uint8Array(ab),a.byteLength);all.set(b,a.byteLength+ab.byteLength);
       const r=await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+boundary},body:all});driveFileId=(await r.json()).id;
     }
-    syncProgress(96,'正在确认同步状态…');driveSetStatus('已同步到 Google Drive · '+new Date().toLocaleString(),'ok');syncProgress(100,'上传完成');toast('已上传到 Google Drive ✓');
+    syncProgress(96,'正在确认同步状态…');driveSetStatus('已同步到 Google Drive · '+new Date().toLocaleString(),'ok');syncProgress(100,'上传完成');try{toast('已上传到 Google Drive ✓')}catch(_e){}
     setTimeout(()=>syncProgress(0,'',false),1200);
   }catch(e){driveSetStatus('同步失败：'+(e.message||e),'error');syncProgress(0,'',false);alert('Google Drive 上传失败：'+(e.message||e))}
   finally{driveBusy=false}
@@ -864,13 +905,13 @@ async function driveDownload(){
       const [photoId,fileId]=entries[i];syncProgress(40+(i/total)*50,`正在恢复照片 ${i+1}/${total}…`);
       try{const pr=await driveFetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(fileId)+'?alt=media');const blob=await pr.blob();await txPutAll('photos',[{id:photoId,blob}]);}catch(e){console.warn('照片恢复失败',photoId,e)}
     }
-    writeLocalFallback();await loadPhotoStore();render();syncProgress(96,'正在刷新应用…');driveSetStatus('已从 Google Drive 恢复 · '+new Date().toLocaleString(),'ok');syncProgress(100,'恢复完成');toast('云端数据已恢复 ✓');setTimeout(()=>syncProgress(0,'',false),1200);
+    writeLocalFallback();await loadPhotoStore();render();syncProgress(96,'正在刷新应用…');driveSetStatus('已从 Google Drive 恢复 · '+new Date().toLocaleString(),'ok');syncProgress(100,'恢复完成');try{toast('云端数据已恢复 ✓')}catch(_e){}setTimeout(()=>syncProgress(0,'',false),1200);
   }catch(e){driveSetStatus('同步失败：'+(e.message||e),'error');syncProgress(0,'',false);alert('Google Drive 恢复失败：'+(e.message||e))}
   finally{driveBusy=false}
 }
 async function driveConnect(){
   if(driveBusy)return;driveBusy=true;
-  try{syncProgress(5,'正在加载 Google 授权…');driveSetStatus('正在连接 Google Drive…');await driveGetToken(true);syncProgress(55,'正在查找云端同步文件…');const f=await driveFindSyncFile();driveFileId=f?.id||null;driveSetStatus(f?'已连接 · 找到云端同步文件':'已连接 · 尚未创建云端同步文件','ok');syncProgress(100,f?'已连接 · 找到云端文件':'已连接 · 尚未创建云端文件');setTimeout(()=>syncProgress(0,'',false),1000);toast('Google Drive 已连接 ✓')}catch(e){driveSetStatus('连接失败：'+(e.message||e),'error');syncProgress(0,'',false);alert('Google Drive 连接失败：'+(e.message||e))}
+  try{syncProgress(5,'正在加载 Google 授权…');driveSetStatus('正在连接 Google Drive…');await driveGetToken(true);syncProgress(55,'正在查找云端同步文件…');const f=await driveFindSyncFile();driveFileId=f?.id||null;driveSetStatus(f?'已连接 · 找到云端同步文件':'已连接 · 尚未创建云端同步文件','ok');syncProgress(100,f?'已连接 · 找到云端文件':'已连接 · 尚未创建云端文件');setTimeout(()=>syncProgress(0,'',false),1000);try{toast('Google Drive 已连接 ✓')}catch(_e){}}catch(e){driveSetStatus('连接失败：'+(e.message||e),'error');syncProgress(0,'',false);alert('Google Drive 连接失败：'+(e.message||e))}
   finally{driveBusy=false}
 }
 
