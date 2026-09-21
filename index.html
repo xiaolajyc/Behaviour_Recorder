@@ -62,8 +62,8 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 .cal-day.empty{background:#fafafa;pointer-events:none}
 .cal-num{font-size:15px;line-height:22px}
 .cal-day.today .cal-num{width:26px;height:26px;line-height:26px;border-radius:50%;background:var(--accent);color:#fff;font-weight:800}
-.calendar-dot-row{min-height:10px;display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:4px;max-width:100%}
-.calendar-behavior-dot{width:9px;height:9px;border-radius:50%;display:inline-block;box-shadow:0 0 0 1px rgba(0,0,0,.12)}
+.calendar-dot-row{min-height:10px;max-height:24px;overflow:hidden;display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:3px;max-width:100%}
+.calendar-behavior-dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%;display:inline-block;box-shadow:0 0 0 1px rgba(0,0,0,.12)}
 @media(max-width:420px){
   .calendar-head b{font-size:20px}
   .cal-day{min-height:62px;padding-top:6px}
@@ -88,7 +88,7 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v8.0.0';
+const APP_VERSION='v9.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -403,7 +403,7 @@ function calendar(){
   const mo=Number.isFinite(calMonth)?calMonth:new Date().getMonth();
   const first=new Date(y,mo,1);
   const last=new Date(y,mo+1,0);
-  const offset=(first.getDay()+6)%7; // Monday = 0
+  const offset=(first.getDay()+6)%7;
   const today=formatDate(new Date());
   const cells=[];
 
@@ -411,23 +411,19 @@ function calendar(){
 
   for(let day=1;day<=last.getDate();day++){
     const date=`${y}-${String(mo+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    // IMPORTANT: one dot represents one record.
     const records=(db.records||[]).filter(r=>r.date===date);
-    const seen=new Set();
-    const dots=[];
-    for(const r of records){
-      if(seen.has(r.behaviorId))continue;
+    const dots=records.map(r=>{
       const b=(db.behaviors||[]).find(x=>x.id===r.behaviorId);
-      if(!b)continue;
-      seen.add(r.behaviorId);
-      dots.push(`<span class="calendar-behavior-dot" style="background:${b.color||'#2563eb'}" title="${esc(b.name)}"></span>`);
-    }
+      return b?`<span class="calendar-behavior-dot" style="background:${b.color||'#2563eb'}" title="${esc(b.name)}"></span>`:'';
+    }).join('');
+
     cells.push(`<button type="button" class="cal-day ${date===today?'today':''}" data-date="${date}" onclick="openCalendarDay('${date}')">
       <span class="cal-num">${day}</span>
-      ${dots.length?`<span class="calendar-dot-row">${dots.join('')}</span>`:'<span class="calendar-dot-row"></span>'}
+      <span class="calendar-dot-row">${dots}</span>
     </button>`);
   }
 
-  // Always complete the final week so the grid remains rectangular.
   while(cells.length%7)cells.push('<div class="cal-day empty" aria-hidden="true"></div>');
 
   return `<div class="card calendar-head">
@@ -460,38 +456,26 @@ function behaviorDetail(id){
  ${monthlyChart(b)}${yearlyChart(b)}
  <div class="card" style="margin-top:12px"><div class="row between"><b>历史记录</b><span class="small">${rs.length} 次</span></div>${rs.length?rs.map(recordHtml).join(''):'<div class="empty">暂无记录</div>'}</div>`
 }
-function openBehaviorDetail(id){let b=db.behaviors.find(x=>x.id===id);if(!b)return;openModal(`<div class="row between"><h2>${esc(b.icon||'✓')} ${esc(b.name)}</h2><button class="btn" onclick="closeModal()">关闭</button></div><div style="margin-top:14px">${behaviorDetail(id)}</div>`)}
-function openModal(html){document.getElementById('sheet').innerHTML=html;document.getElementById('modal').classList.add('show')}
-function closeModal(){document.getElementById('modal').classList.remove('show')}
-document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal()})
-
-function openBehavior(id){let b=id?db.behaviors.find(x=>x.id===id):null;openModal(`<h2>${b?'编辑行为':'添加行为'}</h2><label>行为名称</label><input id="bn" value="${esc(b?.name||'')}" placeholder="例如：洗衣服"><div class="form-grid"><div><label>图标</label><input id="bi" value="${esc(b?.icon||'✓')}"></div><div><label>颜色</label><input id="bcolor" type="color" value="${b?.color||COLORS[db.behaviors.length%COLORS.length]}" style="height:44px;padding:4px"></div></div><label>是否设置频率目标</label><select id="bhas" onchange="toggleFreq()"><option value="no" ${b&&!b.hasTarget?'selected':''}>不设置目标</option><option value="yes" ${!b||b.hasTarget?'selected':''}>设置目标</option></select><div id="freqArea"><label>频率</label><select id="ft"><option value="day" ${b?.freqType==='day'?'selected':''}>每天</option><option value="week" ${(!b||b.freqType==='week')?'selected':''}>每周</option><option value="month" ${b?.freqType==='month'?'selected':''}>每月</option><option value="custom" ${b?.freqType==='custom'?'selected':''}>每 N 天</option></select><div class="form-grid"><div><label>目标次数</label><input id="bt" type="number" min="1" value="${b?.target||1}"></div><div><label>周期天数</label><input id="bp" type="number" min="1" value="${b?.period||7}"></div></div></div><label><input id="bphoto" type="checkbox" style="width:auto" ${b?.photo?'checked':''}> 允许为记录添加照片</label><div class="actions">${b?`<button class="btn danger" onclick="deleteBehavior('${b.id}')">删除行为</button>`:''}<button class="btn" onclick="closeModal()">取消</button><button class="btn primary" onclick="saveBehavior('${id||''}')">保存</button></div>`);toggleFreq()}
-function toggleFreq(){let has=document.getElementById('bhas')?.value==='yes';if(document.getElementById('freqArea'))document.getElementById('freqArea').style.display=has?'block':'none'}
-async function saveBehavior(id){try{let name=document.getElementById('bn').value.trim();if(!name){alert('请输入行为名称');return}let b=id?db.behaviors.find(x=>x.id===id):{id:uid(),archived:false};let has=document.getElementById('bhas').value==='yes';Object.assign(b,{name,icon:document.getElementById('bi').value||'✓',color:document.getElementById('bcolor').value,hasTarget:has,photo:document.getElementById('bphoto').checked});if(has){b.freqType=document.getElementById('ft').value;b.target=Math.max(1,+document.getElementById('bt').value||1);b.period=Math.max(1,+document.getElementById('bp').value||7)}else{delete b.freqType;delete b.target;delete b.period}if(!id)db.behaviors.push(b);await save();closeModal();render()}catch(e){alert('保存失败：'+e.message)}}
-async function deleteBehavior(id){let b=db.behaviors.find(x=>x.id===id);if(!b)return;if(!confirm(`确定删除“${b.name}”以及它的全部历史记录和照片吗？此操作不可恢复。`))return;db.behaviors=db.behaviors.filter(x=>x.id!==id);db.records=db.records.filter(r=>r.behaviorId!==id);try{await save();closeModal();render()}catch(e){alert('删除失败：'+e.message)}}
-function openRecord(id){let bs=activeBehaviors();if(!bs.length){alert('请先添加行为');return}let b=id?db.behaviors.find(x=>x.id===id):bs[0];selectedBehavior=b.id;pendingPhotos={before:null,after:null};openModal(`<h2>新建记录</h2><label>行为</label><select id="recordBehavior" onchange="selectedBehavior=this.value">${bs.map(x=>`<option value="${x.id}" ${x.id===b.id?'selected':''}>${esc(x.icon||'✓')} ${esc(x.name)}</option>`).join('')}</select><label>日期</label><input id="rd" type="date" value="${isoDate()}"><label>时间</label><input id="rt" type="time" value="${new Date().toTimeString().slice(0,5)}"><label>备注</label><textarea id="rn" placeholder="可选"></textarea><label>照片（可选，可从图库选择）</label><div class="photo-grid"><div><div class="small">之前</div><div class="photo-box" id="beforeBox"><button class="btn" onclick="choosePhoto('before')">＋ 从图库选择</button></div></div><div><div class="small">之后</div><div class="photo-box" id="afterBox"><button class="btn" onclick="choosePhoto('after')">＋ 从图库选择</button></div></div></div><div class="actions"><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" onclick="saveRecord()">保存记录</button></div>`)}
-function choosePhoto(which){photoTarget=which;document.getElementById('photoInput').value='';document.getElementById('photoInput').click()}
-async function fileToDataURL(file){
-  return new Promise((resolve,reject)=>{
-    const fr=new FileReader();
-    fr.onload=()=>{
-      const src=fr.result,img=new Image();
-      img.onload=()=>{
-        try{
-          const max=1600,iw=img.naturalWidth||img.width,ih=img.naturalHeight||img.height;
-          const scale=Math.min(1,max/Math.max(iw,ih));
-          const w=Math.max(1,Math.round(iw*scale)),h=Math.max(1,Math.round(ih*scale));
-          const c=document.createElement('canvas');c.width=w;c.height=h;
-          c.getContext('2d').drawImage(img,0,0,w,h);
-          resolve(c.toDataURL('image/jpeg',0.82));
-        }catch(e){resolve(src)}
-      };
-      img.onerror=()=>resolve(src);
-      img.src=src;
-    };
-    fr.onerror=()=>reject(fr.error||new Error('读取照片失败'));
-    fr.readAsDataURL(file);
-  });
+function openBehaviorDetail(id){
+  const b=(db.behaviors||[]).find(x=>x.id===id);
+  if(!b){alert('找不到这个行为');return;}
+  selectedBehavior=id;
+  // Use the existing detail renderer if available.
+  if(typeof behaviorDetail==='function'){
+    openModal(behaviorDetail(id));
+    return;
+  }
+  if(typeof behaviorDetailPage==='function'){
+    page('stats');
+    setTimeout(()=>{selectedBehavior=id;render()},0);
+    return;
+  }
+  // Safe fallback: show the behavior's records directly.
+  const rs=(db.records||[]).filter(r=>r.behaviorId===id).sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
+  openModal(`<h2>${esc(b.icon||'✓')} ${esc(b.name)}</h2>
+    <div class="small" style="margin:8px 0 14px">共 ${rs.length} 条记录</div>
+    ${rs.length?rs.map(recordHtml).join(''):'<div class="empty">暂无历史记录</div>'}
+    <div class="actions"><button class="btn" onclick="closeModal()">关闭</button></div>`);
 }
 document.getElementById('photoInput').addEventListener('change',async e=>{
   const f=e.target.files[0];if(!f)return;
