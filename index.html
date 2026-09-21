@@ -70,6 +70,10 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
   .cal-num{font-size:14px}
   .calendar-behavior-dot{width:8px;height:8px}
 }
+
+/* Google Drive sync */
+.drive-card{overflow:hidden}.drive-status{font-size:11px;color:var(--muted);line-height:1.35;text-align:right;max-width:48%}.drive-connected{color:var(--good);font-weight:700}.drive-error{color:var(--bad);font-weight:700}.drive-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.drive-actions button:first-child{grid-column:1/-1}.drive-actions .btn{margin:0}.sync-progress{display:none;margin-top:11px}.sync-progress.show{display:block}.sync-progress-track{height:7px;border-radius:99px;background:#e8edf4;overflow:hidden}.sync-progress-bar{height:100%;width:0;background:linear-gradient(90deg,#2563eb,#1680ff);border-radius:99px;transition:width .2s}.sync-progress-text{font-size:10px;color:var(--muted);margin-top:5px;display:flex;justify-content:space-between;gap:8px}
+@media(max-width:420px){.drive-actions{grid-template-columns:1fr}.drive-actions button:first-child{grid-column:auto}.drive-status{max-width:45%}}
 </style>
 </head>
 <body>
@@ -88,7 +92,7 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v10.0.0';
+const APP_VERSION='v11.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -645,9 +649,20 @@ function stats(){
 }
 function behaviors(){let list=db.behaviors.map(b=>`<div class="card" style="border-left:4px solid ${color(b)};opacity:${b.archived?.55:1}"><div class="row"><span style="font-size:26px">${esc(b.icon||'✓')}</span><div style="flex:1"><b>${esc(b.name)}</b><div class="small">${freqText(b)} · ${b.photo?'可添加照片':'无照片要求'}</div></div><button class="btn" onclick="openBehaviorDetail('${b.id}')">详情</button><button class="btn" onclick="openBehavior('${b.id}')">编辑</button></div></div>`).join('');return `<div class="row between" style="margin-bottom:12px"><div class="section-title" style="margin:0">我的行为</div><div class="row"><button class="btn" onclick="page('settings')">⚙️ 设置</button><button class="btn primary" onclick="openBehavior()">＋ 添加</button></div></div>${list||'<div class="empty">还没有创建行为</div>'}`}
 function settingsPage(){
+ const ds=driveTokenValid()?(driveFileId?'已连接 · 已找到云端数据':'已连接 · 尚未创建云端数据'):'未连接';
+ const dc=driveTokenValid()?'drive-connected':'';
  return `<div class="card"><div class="row between"><div><b>应用信息</b><div class="small" style="margin-top:5px">个人行为记录</div></div><b>${APP_VERSION}</b></div></div>
  <div class="card"><b>数据存储</b><p class="small" style="margin-top:8px">数据保存在本设备浏览器的 IndexedDB 中。照片单独存储，不再占用 localStorage 的小容量配额。</p></div>
- <div class="card"><b>版本信息</b><div class="small" style="margin-top:8px">当前版本：${APP_VERSION}<br>数据结构：IndexedDB v5 + 本地元数据备份<br>更新内容：历史记录、月度趋势、年度对比、照片独立存储、刷新数据持久化。</div></div>`
+ <div class="card drive-card"><div class="row between"><b>☁️ Google Drive 多设备同步</b><span id="driveStatus" class="drive-status ${dc}">${ds}</span></div>
+   <div class="drive-actions">
+     <button type="button" class="btn primary" onclick="driveConnect()">连接 Google Drive</button>
+     <button type="button" class="btn" onclick="driveUpload()">上传到云端</button>
+     <button type="button" class="btn" onclick="driveDownload()">从云端恢复</button>
+   </div>
+   <div id="syncProgress" class="sync-progress"><div class="sync-progress-track"><div id="syncBar" class="sync-progress-bar"></div></div><div class="sync-progress-text"><span id="syncText">准备同步…</span><span id="syncPct">0%</span></div></div>
+   <div class="small" style="margin-top:9px">与 TodoCalendar 使用相同的 Google Identity Services + Drive API + drive.file 方案。同步行为、历史记录、设置以及前后照片。</div>
+ </div>
+ <div class="card"><b>版本信息</b><div class="small" style="margin-top:8px">当前版本：${APP_VERSION}<br>数据结构：IndexedDB v5 + 本地元数据备份<br>更新内容：Google Drive 多设备同步、照片同步、历史记录、月度趋势、年度对比。</div></div>`
 }
 function behaviorDetail(id){
  let b=db.behaviors.find(x=>x.id===id);if(!b)return '';
@@ -705,6 +720,160 @@ async function saveRecord(){
     render();
   }catch(e){alert('保存记录失败：'+e.message)}
 }
+
+/* v11 Google Drive sync — same GIS + drive.file architecture used by TodoCalendar. */
+const DRIVE_CLIENT_ID='801960562511-alftubecs912f4dotv2vrm80mlo881uo.apps.googleusercontent.com';
+const DRIVE_SCOPE='https://www.googleapis.com/auth/drive.file';
+const DRIVE_FILE_NAME='personal-behavior-tracker-sync-v1.json';
+const DRIVE_PHOTO_PREFIX='personal-behavior-tracker-photo-';
+let driveToken=null,driveTokenExpiresAt=0,driveFileId=null,driveBusy=false,driveGISPromise=null;
+function driveSetStatus(text,type=''){
+  const e=document.getElementById('driveStatus');
+  if(e){e.textContent=text;e.className='drive-status '+(type==='ok'?'drive-connected':type==='error'?'drive-error':'')}
+}
+function syncProgress(p,text,show=true){
+  const box=document.getElementById('syncProgress');
+  if(!box)return;
+  box.classList.toggle('show',show);
+  const bar=document.getElementById('syncBar'),pct=document.getElementById('syncPct'),txt=document.getElementById('syncText');
+  if(bar)bar.style.width=Math.max(0,Math.min(100,p))+'%';
+  if(pct)pct.textContent=Math.round(p)+'%';
+  if(txt)txt.textContent=text;
+  if(!show&&bar)bar.style.width='0%';
+}
+function driveEnsureGIS(){
+  if(window.google?.accounts?.oauth2)return Promise.resolve();
+  if(driveGISPromise)return driveGISPromise;
+  driveGISPromise=new Promise((resolve,reject)=>{
+    const old=document.querySelector('script[data-google-gis]');
+    if(old){old.addEventListener('load',resolve,{once:true});old.addEventListener('error',reject,{once:true});return}
+    const s=document.createElement('script');s.src='https://accounts.google.com/gsi/client';s.async=true;s.defer=true;s.dataset.googleGis='1';s.onload=resolve;s.onerror=()=>reject(new Error('Google Identity Services 加载失败'));document.head.appendChild(s);
+  });
+  return driveGISPromise;
+}
+function driveTokenValid(){return !!driveToken&&Date.now()<driveTokenExpiresAt-60000}
+async function driveGetToken(interactive=false){
+  if(driveTokenValid())return driveToken;
+  await driveEnsureGIS();
+  return await new Promise((resolve,reject)=>{
+    let settled=false;
+    const client=google.accounts.oauth2.initTokenClient({
+      client_id:DRIVE_CLIENT_ID,scope:DRIVE_SCOPE,
+      callback:r=>{
+        if(r.error){settled=true;reject(new Error(r.error_description||r.error));return}
+        driveToken=r.access_token;driveTokenExpiresAt=Date.now()+Number(r.expires_in||3600)*1000;settled=true;resolve(driveToken)
+      },
+      error_callback:e=>{if(!settled)reject(new Error(e?.message||'Google 授权未完成'))}
+    });
+    client.requestAccessToken({prompt:interactive?'consent':''});
+  });
+}
+async function driveFetch(url,options={}){
+  let token=await driveGetToken(false),headers=new Headers(options.headers||{});
+  headers.set('Authorization','Bearer '+token);
+  let r=await fetch(url,{...options,headers});
+  if(r.status===401){
+    driveToken=null;driveTokenExpiresAt=0;token=await driveGetToken(true);headers.set('Authorization','Bearer '+token);r=await fetch(url,{...options,headers});
+  }
+  if(!r.ok){let msg='HTTP '+r.status;try{const e=await r.json();msg=e.error?.message||msg}catch{}throw new Error(msg)}
+  return r;
+}
+function driveEscapeName(name){return String(name).replace(/'/g,"\\'")}
+async function driveFindFileByName(name){
+  const q=`name='${driveEscapeName(name)}' and trashed=false`;
+  const url='https://www.googleapis.com/drive/v3/files?'+new URLSearchParams({q,spaces:'drive',fields:'files(id,name,modifiedTime,size,mimeType)',pageSize:'10'});
+  const r=await driveFetch(url),d=await r.json();
+  return d.files?.[0]||null;
+}
+async function driveFindSyncFile(){
+  const f=await driveFindFileByName(DRIVE_FILE_NAME);driveFileId=f?.id||null;return f;
+}
+async function driveReadPhotos(){
+  try{return await txReadAll('photos')}catch(e){return []}
+}
+function driveSafePhotoName(id){
+  return DRIVE_PHOTO_PREFIX+String(id).replace(/[^A-Za-z0-9._-]/g,'_')+'.jpg';
+}
+function drivePayload(photoMap){
+  return {schema:'personal-behavior-tracker-sync-v1',appVersion:APP_VERSION,updatedAt:new Date().toISOString(),data:localSnapshot(),photos:photoMap||{}};
+}
+async function driveUploadMedia(name,blob,existingId=null){
+  const body=blob instanceof Blob?blob:new Blob([blob],{type:'application/octet-stream'});
+  if(existingId){
+    await driveFetch('https://www.googleapis.com/upload/drive/v3/files/'+encodeURIComponent(existingId)+'?uploadType=media',{method:'PATCH',headers:{'Content-Type':body.type||'application/octet-stream'},body});
+    return existingId;
+  }
+  const meta=JSON.stringify({name,mimeType:body.type||'image/jpeg'});
+  const boundary='pbtBoundary'+Date.now()+Math.random().toString(16).slice(2);
+  const ab=await body.arrayBuffer();
+  const enc=new TextEncoder();
+  const a=enc.encode('--'+boundary+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+meta+'\r\n--'+boundary+'\r\nContent-Type: '+(body.type||'image/jpeg')+'\r\n\r\n');
+  const b=enc.encode('\r\n--'+boundary+'--');
+  const combined=new Uint8Array(a.byteLength+ab.byteLength+b.byteLength);combined.set(a,0);combined.set(new Uint8Array(ab),a.byteLength);combined.set(b,a.byteLength+ab.byteLength);
+  const r=await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+boundary},body:combined});
+  return (await r.json()).id;
+}
+async function driveUpload(){
+  if(driveBusy)return;driveBusy=true;
+  try{
+    syncProgress(3,'准备上传…');driveSetStatus('正在连接 Google Drive…');await driveGetToken(false);
+    syncProgress(12,'正在读取本机数据…');const photos=await driveReadPhotos();
+    const photoMap={};
+    const total=Math.max(1,photos.length);
+    for(let i=0;i<photos.length;i++){
+      const p=photos[i];if(!p?.id||!p?.blob)continue;
+      const name=driveSafePhotoName(p.id);syncProgress(15+(i/total)*55,`正在上传照片 ${i+1}/${total}…`);
+      const existing=await driveFindFileByName(name);
+      photoMap[p.id]=await driveUploadMedia(name,p.blob,existing?.id||null);
+    }
+    syncProgress(72,'正在生成同步数据…');
+    const text=JSON.stringify(drivePayload(photoMap),null,2);
+    const existing=await driveFindSyncFile();
+    if(existing){
+      driveFileId=existing.id;syncProgress(84,'正在更新云端同步文件…');
+      await driveFetch('https://www.googleapis.com/upload/drive/v3/files/'+encodeURIComponent(driveFileId)+'?uploadType=media',{method:'PATCH',headers:{'Content-Type':'application/json'},body:text});
+    }else{
+      syncProgress(84,'正在创建云端同步文件…');
+      const blob=new Blob([text],{type:'application/json'});const boundary='pbtJsonBoundary'+Date.now();
+      const meta=JSON.stringify({name:DRIVE_FILE_NAME,mimeType:'application/json'});const enc=new TextEncoder();
+      const a=enc.encode('--'+boundary+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+meta+'\r\n--'+boundary+'\r\nContent-Type: application/json\r\n\r\n');
+      const ab=await blob.arrayBuffer(),b=enc.encode('\r\n--'+boundary+'--');const all=new Uint8Array(a.byteLength+ab.byteLength+b.byteLength);all.set(a);all.set(new Uint8Array(ab),a.byteLength);all.set(b,a.byteLength+ab.byteLength);
+      const r=await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+boundary},body:all});driveFileId=(await r.json()).id;
+    }
+    syncProgress(96,'正在确认同步状态…');driveSetStatus('已同步到 Google Drive · '+new Date().toLocaleString(),'ok');syncProgress(100,'上传完成');toast('已上传到 Google Drive ✓');
+    setTimeout(()=>syncProgress(0,'',false),1200);
+  }catch(e){driveSetStatus('同步失败：'+(e.message||e),'error');syncProgress(0,'',false);alert('Google Drive 上传失败：'+(e.message||e))}
+  finally{driveBusy=false}
+}
+async function driveDownload(){
+  if(driveBusy)return;driveBusy=true;
+  try{
+    syncProgress(5,'准备恢复…');driveSetStatus('正在从 Google Drive 下载…');await driveGetToken(false);
+    const f=await driveFindSyncFile();
+    if(!f){driveSetStatus('云端还没有同步文件','error');syncProgress(0,'',false);alert('Google Drive 中还没有行为追踪同步文件，请先在一台设备点击“上传到云端”。');return}
+    driveFileId=f.id;syncProgress(18,'正在下载云端数据…');
+    const r=await driveFetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(driveFileId)+'?alt=media');const data=await r.json();
+    if(data.schema!=='personal-behavior-tracker-sync-v1'||!data.data||!Array.isArray(data.data.behaviors)||!Array.isArray(data.data.records))throw new Error('云端文件格式不正确');
+    if(!confirm('将用 Google Drive 中的数据覆盖本机行为追踪数据吗？\n\n同步内容：行为、历史记录、设置以及前后照片。')){driveSetStatus('已连接 · 未覆盖本机数据','ok');syncProgress(0,'',false);return}
+    syncProgress(35,'正在恢复行为与历史记录…');
+    db={behaviors:data.data.behaviors||[],records:data.data.records||[],settings:{...(data.data.settings||{}),version:APP_VERSION}};
+    await txDeleteAll('behaviors');await txDeleteAll('records');await txDeleteAll('photos');await txDeleteAll('meta');
+    await txPutAll('behaviors',db.behaviors);await txPutAll('records',db.records);await txPutAll('meta',[{key:'settings',value:db.settings}]);
+    const photoMap=data.photos||{},entries=Object.entries(photoMap),total=Math.max(1,entries.length);
+    for(let i=0;i<entries.length;i++){
+      const [photoId,fileId]=entries[i];syncProgress(40+(i/total)*50,`正在恢复照片 ${i+1}/${total}…`);
+      try{const pr=await driveFetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(fileId)+'?alt=media');const blob=await pr.blob();await txPutAll('photos',[{id:photoId,blob}]);}catch(e){console.warn('照片恢复失败',photoId,e)}
+    }
+    writeLocalFallback();await loadPhotoStore();render();syncProgress(96,'正在刷新应用…');driveSetStatus('已从 Google Drive 恢复 · '+new Date().toLocaleString(),'ok');syncProgress(100,'恢复完成');toast('云端数据已恢复 ✓');setTimeout(()=>syncProgress(0,'',false),1200);
+  }catch(e){driveSetStatus('同步失败：'+(e.message||e),'error');syncProgress(0,'',false);alert('Google Drive 恢复失败：'+(e.message||e))}
+  finally{driveBusy=false}
+}
+async function driveConnect(){
+  if(driveBusy)return;driveBusy=true;
+  try{syncProgress(5,'正在加载 Google 授权…');driveSetStatus('正在连接 Google Drive…');await driveGetToken(true);syncProgress(55,'正在查找云端同步文件…');const f=await driveFindSyncFile();driveFileId=f?.id||null;driveSetStatus(f?'已连接 · 找到云端同步文件':'已连接 · 尚未创建云端同步文件','ok');syncProgress(100,f?'已连接 · 找到云端文件':'已连接 · 尚未创建云端文件');setTimeout(()=>syncProgress(0,'',false),1000);toast('Google Drive 已连接 ✓')}catch(e){driveSetStatus('连接失败：'+(e.message||e),'error');syncProgress(0,'',false);alert('Google Drive 连接失败：'+(e.message||e))}
+  finally{driveBusy=false}
+}
+
 window.addEventListener('hashchange',()=>{
   const p=location.hash.slice(1);
   if(['today','history','calendar','stats','behaviors','settings'].includes(p))render();
