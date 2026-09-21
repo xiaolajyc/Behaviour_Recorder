@@ -45,6 +45,10 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 .calendar-dot-row{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
 .calendar-behavior-dot{width:9px;height:9px;border-radius:50%;display:inline-block;box-shadow:0 0 0 1px rgba(0,0,0,.08)}
 
+
+.iconbtn{cursor:pointer;min-width:36px;min-height:36px;display:inline-flex;align-items:center;justify-content:center;position:relative;z-index:5}
+.cal-day{cursor:pointer;border:0;font:inherit;color:inherit}
+.cal-day.empty{pointer-events:none}
 </style>
 </head>
 <body>
@@ -63,7 +67,7 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v6.0.0';
+const APP_VERSION='v7.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -282,6 +286,29 @@ function render(){
 }
 function behaviorCard(b){let c=countFor(b),t=+b.target||1,p=b.hasTarget?Math.min(100,c/t*100):0;return `<button class="behavior" style="--c:${color(b)}" onclick="openRecord('${b.id}')"><div class="icon">${esc(b.icon||'✓')}</div><div class="name">${esc(b.name)}</div><div class="small">${freqText(b)}</div>${b.hasTarget?`<div class="progress"><i style="width:${p}%;background:${color(b)}"></i></div><div class="small">${c>=t?'✓ 已达标':`已完成 ${c} / ${t}`}</div>`:`<div class="small" style="margin-top:14px">累计记录 ${c} 次</div>`}</button>`}
 function today(){let bs=activeBehaviors();if(!bs.length)return `<div class="empty">还没有行为。<br><br><button class="btn primary" onclick="openBehavior()">＋ 添加第一个行为</button></div>`;let cards=bs.map(behaviorCard).join('');let recent=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp).slice(0,8).map(recordHtml).join('');return `<div class="section"><div class="section-title">快速记录</div><div class="grid">${cards}</div></div><div class="section"><div class="section-title">最近记录</div>${recent||'<div class="empty">暂无记录</div>'}</div>`}
+async function deleteRecord(id){
+  const r=(db.records||[]).find(x=>x.id===id);
+  if(!r)return;
+  if(!confirm('确定删除这条历史记录吗？'))return;
+  try{
+    db.records=db.records.filter(x=>x.id!==id);
+    const ids=[r.before,r.after].filter(Boolean);
+    if(ids.length){
+      const d=await openIDB();
+      await new Promise((resolve,reject)=>{
+        const tx=d.transaction('photos','readwrite'),s=tx.objectStore('photos');
+        ids.forEach(k=>s.delete(k));
+        tx.oncomplete=resolve;
+        tx.onerror=()=>reject(tx.error||new Error('照片删除失败'));
+        tx.onabort=()=>reject(tx.error||new Error('照片删除失败'));
+      });
+    }
+    await save();
+    render();
+  }catch(e){
+    alert('删除失败：'+e.message);
+  }
+}
 function recordHtml(r){
   const b=db.behaviors.find(x=>x.id===r.behaviorId);
   if(!b)return '';
@@ -290,7 +317,7 @@ function recordHtml(r){
   return `<div class="record card" data-date="${esc(r.date)}" style="border-left:4px solid ${b.color||'#2563eb'}">
     <div class="row between">
       <button class="behavior-link" onclick="openBehaviorDetail('${b.id}')" style="color:${b.color||'#2563eb'}">${esc(b.icon||'✓')} ${esc(b.name)}</button>
-      <button class="iconbtn" onclick="deleteRecord('${r.id}')" aria-label="删除">🗑️</button>
+      <button type="button" class="iconbtn" onclick="event.stopPropagation();deleteRecord('${r.id}')" aria-label="删除">🗑️</button>
     </div>
     <div class="small">${esc(r.date)} ${r.time?esc(r.time):''}</div>
     ${r.note?`<div class="note">${esc(r.note)}</div>`:''}
@@ -319,40 +346,54 @@ function historyPage(){
 }
 function setHistoryFilter(id){historyFilter=id;render()}
 
+function openCalendarDay(ds){
+  page('history');
+  setTimeout(()=>{
+    const el=document.querySelector('[data-date="'+ds+'"]');
+    if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
+  },50);
+}
+function changeMonth(delta){
+  if(!Number.isFinite(calYear))calYear=new Date().getFullYear();
+  if(!Number.isFinite(calMonth))calMonth=new Date().getMonth();
+  calMonth+=delta;
+  if(calMonth<0){calMonth=11;calYear--}
+  if(calMonth>11){calMonth=0;calYear++}
+  render();
+}
 function calendar(){
   const now=new Date();
-  const y=calYear??now.getFullYear();
-  const mo=calMonth??now.getMonth();
+  const y=Number.isFinite(calYear)?calYear:now.getFullYear();
+  const mo=Number.isFinite(calMonth)?calMonth:now.getMonth();
   const first=new Date(y,mo,1);
   const last=new Date(y,mo+1,0);
-  const start=(first.getDay()+6)%7;
-  const days=[];
-  for(let i=0;i<start;i++)days.push('<div class="cal-day empty"></div>');
+  const offset=(first.getDay()+6)%7;
+  const today=formatDate(new Date());
+  const cells=[];
+  for(let i=0;i<offset;i++)cells.push('<div class="cal-day empty"></div>');
   for(let d=1;d<=last.getDate();d++){
     const ds=`${y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const recs=db.records.filter(r=>r.date===ds);
-    const dots=[];
-    const seen=new Set();
+    const recs=(db.records||[]).filter(r=>r.date===ds);
+    const seen=new Set(),dots=[];
     for(const r of recs){
       if(seen.has(r.behaviorId))continue;
-      const b=db.behaviors.find(x=>x.id===r.behaviorId);
+      const b=(db.behaviors||[]).find(x=>x.id===r.behaviorId);
       if(!b)continue;
       seen.add(r.behaviorId);
       dots.push(`<span class="calendar-behavior-dot" style="background:${b.color||'#2563eb'}" title="${esc(b.name)}"></span>`);
     }
-    const isToday=ds===formatDate(new Date());
-    days.push(`<div class="cal-day ${isToday?'today':''}" onclick="openDay('${ds}')">
-      <div class="cal-num">${d}</div>
-      ${dots.length?`<div class="calendar-dot-row">${dots.join('')}</div>`:''}
-    </div>`);
+    cells.push(`<button type="button" class="cal-day ${ds===today?'today':''}" onclick="openCalendarDay('${ds}')">
+      <span class="cal-num">${d}</span>
+      ${dots.length?`<span class="calendar-dot-row">${dots.join('')}</span>`:''}
+    </button>`);
   }
   return `<div class="card calendar-head">
-    <button class="iconbtn" onclick="changeMonth(-1)">‹</button>
+    <button type="button" class="iconbtn" onclick="changeMonth(-1)">‹</button>
     <b>${y}年${mo+1}月</b>
-    <button class="iconbtn" onclick="changeMonth(1)">›</button>
+    <button type="button" class="iconbtn" onclick="changeMonth(1)">›</button>
   </div>
   <div class="calendar-week">${['一','二','三','四','五','六','日'].map(x=>`<div>${x}</div>`).join('')}</div>
-  <div class="calendar-grid">${days.join('')}</div>`;
+  <div class="calendar-grid">${cells.join('')}</div>`;
 }
 function changeMonth(n){calOffset+=n;let base=new Date();base.setMonth(base.getMonth()+calOffset);document.getElementById('main').innerHTML=calendarAt(base)}
 function calendarAt(now){let y=now.getFullYear(),mo=now.getMonth(),first=new Date(y,mo,1),last=new Date(y,mo+1,0),offset=(first.getDay()+6)%7,c='';for(let i=0;i<offset;i++)c+='<div class="day"></div>';for(let d=1;d<=last.getDate();d++){let date=isoDate(new Date(y,mo,d)),rs=db.records.filter(r=>r.date===date);c+=`<div class="day ${date===isoDate(new Date())?'today':''}" onclick="dayDetail('${date}')"><b>${d}</b><div class="dots">${rs.slice(0,12).map(()=>'<i class="dot"></i>').join('')}</div></div>`}return `<div class="row between" style="margin-bottom:12px"><button class="btn" onclick="changeMonth(-1)">‹</button><b>${y}年 ${mo+1}月</b><button class="btn" onclick="changeMonth(1)">›</button></div><div class="calendar"><div class="cal-head">${['一','二','三','四','五','六','日'].map(x=>`<div>${x}</div>`).join('')}</div><div class="cal-grid">${c}</div></div>`}
