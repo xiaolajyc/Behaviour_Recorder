@@ -27,6 +27,24 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 .photo-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.photo-box{border:1px dashed #c8ccd1;border-radius:12px;min-height:130px;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fafafa}.photo-box img{width:100%;height:160px;object-fit:cover}
 .empty{text-align:center;padding:30px;color:var(--muted)}
 @media(min-width:700px){.grid{grid-template-columns:repeat(3,1fr)}main{padding:22px}.modal{align-items:center}.sheet{border-radius:20px}}
+
+/* v6: photo comparison */
+.photo-compare{display:grid;grid-template-columns:minmax(0,1fr) 34px minmax(0,1fr);gap:8px;align-items:center;margin-top:10px}
+.compare-photo{position:relative;border-radius:14px;overflow:hidden;background:#f2f3f5;border:2px solid #d9dce1;min-height:130px}
+.compare-photo.before-photo{border-color:#9aa0a6}
+.compare-photo.after-photo{border-color:#2563eb}
+.compare-photo img{display:block;width:100%;aspect-ratio:1/1;object-fit:cover;cursor:pointer}
+.photo-label{position:absolute;z-index:2;left:8px;top:8px;padding:4px 8px;border-radius:999px;background:rgba(0,0,0,.62);color:#fff;font-size:12px;font-weight:700}
+.after-photo .photo-label{background:rgba(37,99,235,.9)}
+.compare-arrow{font-size:24px;font-weight:800;text-align:center;color:#6b7280}
+.compare-title{margin-top:12px;font-weight:800;font-size:14px}
+.no-photo{height:130px;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:13px}
+.behavior-link{border:0;background:none;padding:0;font:inherit;font-weight:800;cursor:pointer;text-align:left}
+
+/* v6: calendar behavior-colored dots */
+.calendar-dot-row{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
+.calendar-behavior-dot{width:9px;height:9px;border-radius:50%;display:inline-block;box-shadow:0 0 0 1px rgba(0,0,0,.08)}
+
 </style>
 </head>
 <body>
@@ -45,12 +63,13 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v5.0.0';
+const APP_VERSION='v6.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
 let photoCache=new Map();
 const COLORS=['#2563eb','#16a34a','#dc2626','#9333ea','#ea580c','#0891b2','#db2777','#65a30d','#7c3aed','#ca8a04'];
+let calYear=new Date().getFullYear(), calMonth=new Date().getMonth();
 let currentPage='today', selectedBehavior=null, photoTarget=null, historyFilter='all';
 
 function openIDB(){
@@ -233,6 +252,7 @@ function photoSrc(value){
   return photoCache.get(value)||'';
 }
 
+function formatDate(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
 function isoDate(d=new Date()){return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10)}
@@ -263,13 +283,31 @@ function render(){
 function behaviorCard(b){let c=countFor(b),t=+b.target||1,p=b.hasTarget?Math.min(100,c/t*100):0;return `<button class="behavior" style="--c:${color(b)}" onclick="openRecord('${b.id}')"><div class="icon">${esc(b.icon||'✓')}</div><div class="name">${esc(b.name)}</div><div class="small">${freqText(b)}</div>${b.hasTarget?`<div class="progress"><i style="width:${p}%;background:${color(b)}"></i></div><div class="small">${c>=t?'✓ 已达标':`已完成 ${c} / ${t}`}</div>`:`<div class="small" style="margin-top:14px">累计记录 ${c} 次</div>`}</button>`}
 function today(){let bs=activeBehaviors();if(!bs.length)return `<div class="empty">还没有行为。<br><br><button class="btn primary" onclick="openBehavior()">＋ 添加第一个行为</button></div>`;let cards=bs.map(behaviorCard).join('');let recent=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp).slice(0,8).map(recordHtml).join('');return `<div class="section"><div class="section-title">快速记录</div><div class="grid">${cards}</div></div><div class="section"><div class="section-title">最近记录</div>${recent||'<div class="empty">暂无记录</div>'}</div>`}
 function recordHtml(r){
- let b=db.behaviors.find(x=>x.id===r.behaviorId),c=b?color(b):'#999';
- const before=photoSrc(r.before),after=photoSrc(r.after);
- return `<div class="card record" style="--c:${c}">
-   <div class="row between"><button style="background:none;padding:0;font-weight:700" onclick="${b?`openBehaviorDetail('${b.id}')`:'void 0'}">${b?esc(b.icon||'✓')+' '+esc(b.name):'已删除行为'}</button><span class="small">${new Date(r.timestamp).toLocaleString('zh-CN')}</span></div>
-   ${r.note?`<div class="small" style="margin-top:7px">${esc(r.note)}</div>`:''}
-   ${before||after?`<div class="thumb-row">${before?`<img class="thumb" src="${before}">`:''}${after?`<img class="thumb" src="${after}">`:''}</div>`:''}
- </div>`
+  const b=db.behaviors.find(x=>x.id===r.behaviorId);
+  if(!b)return '';
+  const before=r.before?photoSrc(r.before):'';
+  const after=r.after?photoSrc(r.after):'';
+  return `<div class="record card" data-date="${esc(r.date)}" style="border-left:4px solid ${b.color||'#2563eb'}">
+    <div class="row between">
+      <button class="behavior-link" onclick="openBehaviorDetail('${b.id}')" style="color:${b.color||'#2563eb'}">${esc(b.icon||'✓')} ${esc(b.name)}</button>
+      <button class="iconbtn" onclick="deleteRecord('${r.id}')" aria-label="删除">🗑️</button>
+    </div>
+    <div class="small">${esc(r.date)} ${r.time?esc(r.time):''}</div>
+    ${r.note?`<div class="note">${esc(r.note)}</div>`:''}
+    ${(before||after)?`
+      <div class="compare-title">前后对比</div>
+      <div class="photo-compare">
+        <div class="compare-photo before-photo">
+          <div class="photo-label">之前</div>
+          ${before?`<img src="${before}" onclick="viewPhoto('${r.before}')" alt="之前">`:'<div class="no-photo">未添加</div>'}
+        </div>
+        <div class="compare-arrow">→</div>
+        <div class="compare-photo after-photo">
+          <div class="photo-label">之后</div>
+          ${after?`<img src="${after}" onclick="viewPhoto('${r.after}')" alt="之后">`:'<div class="no-photo">未添加</div>'}
+        </div>
+      </div>`:''}
+  </div>`;
 }
 function historyPage(){
   const bs=activeBehaviors();
@@ -283,19 +321,38 @@ function setHistoryFilter(id){historyFilter=id;render()}
 
 function calendar(){
   const now=new Date();
-  const y=now.getFullYear(),mo=now.getMonth();
-  const first=new Date(y,mo,1),last=new Date(y,mo+1,0);
-  const offset=(first.getDay()+6)%7;
-  let cells='';
-  for(let i=0;i<offset;i++)cells+='<div class=\"day\"></div>';
+  const y=calYear??now.getFullYear();
+  const mo=calMonth??now.getMonth();
+  const first=new Date(y,mo,1);
+  const last=new Date(y,mo+1,0);
+  const start=(first.getDay()+6)%7;
+  const days=[];
+  for(let i=0;i<start;i++)days.push('<div class="cal-day empty"></div>');
   for(let d=1;d<=last.getDate();d++){
-    const date=isoDate(new Date(y,mo,d));
-    const rs=db.records.filter(r=>r.date===date);
-    const isToday=date===isoDate(now);
-    const dots=rs.slice(0,12).map(()=>'<i class=\"dot\"></i>').join('');
-    cells+=`<div class=\"day ${isToday?'today':''}\" onclick=\"dayDetail('${date}')\"><b>${d}</b><div class=\"dots\">${dots}</div></div>`;
+    const ds=`${y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const recs=db.records.filter(r=>r.date===ds);
+    const dots=[];
+    const seen=new Set();
+    for(const r of recs){
+      if(seen.has(r.behaviorId))continue;
+      const b=db.behaviors.find(x=>x.id===r.behaviorId);
+      if(!b)continue;
+      seen.add(r.behaviorId);
+      dots.push(`<span class="calendar-behavior-dot" style="background:${b.color||'#2563eb'}" title="${esc(b.name)}"></span>`);
+    }
+    const isToday=ds===formatDate(new Date());
+    days.push(`<div class="cal-day ${isToday?'today':''}" onclick="openDay('${ds}')">
+      <div class="cal-num">${d}</div>
+      ${dots.length?`<div class="calendar-dot-row">${dots.join('')}</div>`:''}
+    </div>`);
   }
-  return `<div class=\"row between\" style=\"margin-bottom:12px\"><button class=\"btn\" onclick=\"changeMonth(-1)\">‹</button><b>${y}年 ${mo+1}月</b><button class=\"btn\" onclick=\"changeMonth(1)\">›</button></div><div class=\"calendar\"><div class=\"cal-head\">${['一','二','三','四','五','六','日'].map(x=>`<div>${x}</div>`).join('')}</div><div class=\"cal-grid\">${cells}</div></div><div class=\"small\" style=\"margin-top:10px\">点击日期查看当天记录</div>`;
+  return `<div class="card calendar-head">
+    <button class="iconbtn" onclick="changeMonth(-1)">‹</button>
+    <b>${y}年${mo+1}月</b>
+    <button class="iconbtn" onclick="changeMonth(1)">›</button>
+  </div>
+  <div class="calendar-week">${['一','二','三','四','五','六','日'].map(x=>`<div>${x}</div>`).join('')}</div>
+  <div class="calendar-grid">${days.join('')}</div>`;
 }
 function changeMonth(n){calOffset+=n;let base=new Date();base.setMonth(base.getMonth()+calOffset);document.getElementById('main').innerHTML=calendarAt(base)}
 function calendarAt(now){let y=now.getFullYear(),mo=now.getMonth(),first=new Date(y,mo,1),last=new Date(y,mo+1,0),offset=(first.getDay()+6)%7,c='';for(let i=0;i<offset;i++)c+='<div class="day"></div>';for(let d=1;d<=last.getDate();d++){let date=isoDate(new Date(y,mo,d)),rs=db.records.filter(r=>r.date===date);c+=`<div class="day ${date===isoDate(new Date())?'today':''}" onclick="dayDetail('${date}')"><b>${d}</b><div class="dots">${rs.slice(0,12).map(()=>'<i class="dot"></i>').join('')}</div></div>`}return `<div class="row between" style="margin-bottom:12px"><button class="btn" onclick="changeMonth(-1)">‹</button><b>${y}年 ${mo+1}月</b><button class="btn" onclick="changeMonth(1)">›</button></div><div class="calendar"><div class="cal-head">${['一','二','三','四','五','六','日'].map(x=>`<div>${x}</div>`).join('')}</div><div class="cal-grid">${c}</div></div>`}
