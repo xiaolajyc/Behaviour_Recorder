@@ -45,8 +45,8 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v4.0.0';
-const IDB_NAME='personal_behavior_tracker_v4';
+const APP_VERSION='v5.0.0';
+const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
 let photoCache=new Map();
@@ -55,7 +55,7 @@ let currentPage='today', selectedBehavior=null, photoTarget=null;
 
 function openIDB(){
   return new Promise((resolve,reject)=>{
-    const req=indexedDB.open(IDB_NAME,DB_VERSION);
+    const req=indexedDB.open(IDB_NAME,1);
     req.onupgradeneeded=()=>{
       const d=req.result;
       if(!d.objectStoreNames.contains('behaviors'))d.createObjectStore('behaviors',{keyPath:'id'});
@@ -67,140 +67,166 @@ function openIDB(){
     req.onerror=()=>reject(req.error||new Error('IndexedDB unavailable'));
   });
 }
-function txGetAll(storeName){
+function txReadAll(storeName){
   return openIDB().then(d=>new Promise((resolve,reject)=>{
-    const r=d.transaction(storeName,'readonly').objectStore(storeName).getAll();
-    r.onsuccess=()=>resolve(r.result||[]);r.onerror=()=>reject(r.error);
+    const tx=d.transaction(storeName,'readonly');
+    const req=tx.objectStore(storeName).getAll();
+    req.onsuccess=()=>resolve(req.result||[]);
+    req.onerror=()=>reject(req.error||new Error('读取数据库失败'));
   }));
 }
-function txGet(storeName,key){
+function txRead(storeName,key){
   return openIDB().then(d=>new Promise((resolve,reject)=>{
-    const r=d.transaction(storeName,'readonly').objectStore(storeName).get(key);
-    r.onsuccess=()=>resolve(r.result||null);r.onerror=()=>reject(r.error);
+    const req=d.transaction(storeName,'readonly').objectStore(storeName).get(key);
+    req.onsuccess=()=>resolve(req.result||null);
+    req.onerror=()=>reject(req.error||new Error('读取数据库失败'));
   }));
 }
-function clearAndPut(storeName,items){
+function txPutAll(storeName,items){
   return openIDB().then(d=>new Promise((resolve,reject)=>{
     const tx=d.transaction(storeName,'readwrite'),s=tx.objectStore(storeName);
-    s.clear();
-    items.forEach(x=>s.put(x));
+    for(const item of items)s.put(item);
     tx.oncomplete=()=>resolve();
     tx.onerror=()=>reject(tx.error||new Error('数据库写入失败'));
     tx.onabort=()=>reject(tx.error||new Error('数据库写入被中止'));
   }));
+}
+function txDeleteAll(storeName){
+  return openIDB().then(d=>new Promise((resolve,reject)=>{
+    const tx=d.transaction(storeName,'readwrite');
+    tx.objectStore(storeName).clear();
+    tx.oncomplete=()=>resolve();
+    tx.onerror=()=>reject(tx.error||new Error('数据库清理失败'));
+    tx.onabort=()=>reject(tx.error||new Error('数据库清理被中止'));
+  }));
+}
+
+const META_KEY='personal_behavior_tracker_metadata_v5';
+function localSnapshot(){
+  return {behaviors:db.behaviors||[],records:(db.records||[]).map(r=>{
+    const x={...r};
+    // Photos are stored in IndexedDB; keep only their IDs in the durable metadata fallback.
+    if(typeof x.before==='string'&&x.before.startsWith('data:'))delete x.before;
+    if(typeof x.after==='string'&&x.after.startsWith('data:'))delete x.after;
+    return x;
+  }),settings:{...(db.settings||{}),version:APP_VERSION}};
+}
+function writeLocalFallback(){
+  try{
+    localStorage.setItem(META_KEY,JSON.stringify(localSnapshot()));
+    return true;
+  }catch(e){
+    console.warn('localStorage fallback failed',e);
+    return false;
+  }
+}
+function readLocalFallback(){
+  try{
+    const raw=localStorage.getItem(META_KEY);
+    if(!raw)return null;
+    const x=JSON.parse(raw);
+    return x&&Array.isArray(x.behaviors)&&Array.isArray(x.records)?x:null;
+  }catch(e){return null}
+}
+function mergeById(a,b){
+  const m=new Map((a||[]).map(x=>[x.id,x]));
+  for(const x of (b||[]))m.set(x.id,x);
+  return [...m.values()];
 }
 function dataURLToBlob(dataURL){
   if(!dataURL||typeof dataURL!=='string')return null;
   try{
     const parts=dataURL.split(',');
     const mime=(parts[0].match(/:(.*?);/)||[])[1]||'image/jpeg';
-    const bin=atob(parts[1]);const arr=new Uint8Array(bin.length);
+    const bin=atob(parts[1]);
+    const arr=new Uint8Array(bin.length);
     for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
     return new Blob([arr],{type:mime});
   }catch(e){return null}
 }
+async function savePhoto(id,value){
+  if(!value)return;
+  let blob=null;
+  if(typeof value==='string'&&value.startsWith('data:'))blob=dataURLToBlob(value);
+  else if(value instanceof Blob)blob=value;
+  else if(typeof value==='string'&&photoCache.has(value)){
+    try{blob=await fetch(photoCache.get(value)).then(r=>r.blob())}catch(e){}
+  }
+  if(!blob)return;
+  await txPutAll('photos',[{id,blob}]);
+}
 async function loadPhotoStore(){
-  photoCache.forEach(url=>URL.revokeObjectURL(url));photoCache.clear();
-  const photos=await txGetAll('photos');
-  for(const p of photos){
-    if(p.blob)photoCache.set(p.id,URL.createObjectURL(p.blob));
-  }
-}
-async function initStorage(){
+  photoCache.forEach(url=>URL.revokeObjectURL(url));
+  photoCache.clear();
   try{
-    const existingBehaviors=await txGetAll('behaviors');
-    const existingRecords=await txGetAll('records');
-    if(existingBehaviors.length || existingRecords.length){
-      db.behaviors=existingBehaviors;
-      db.records=existingRecords;
-      const meta=await txGet('meta','settings');
-      db.settings=meta?.value||{version:APP_VERSION};
-      db.settings.version=APP_VERSION;
-      await clearAndPut('meta',[{key:'settings',value:db.settings}]);
-      await loadPhotoStore();
-      // Backfill old records if a previous v3 record still contains data URLs.
-      let changed=false;
-      for(const r of db.records){
-        if(typeof r.before==='string' && r.before.startsWith('data:')){
-          const id=r.id+':before',blob=dataURLToBlob(r.before);
-          if(blob){await clearAndPut('photos', (await txGetAll('photos')).concat([{id,blob}]));r.before=id;changed=true}
-        }
-        if(typeof r.after==='string' && r.after.startsWith('data:')){
-          const id=r.id+':after',blob=dataURLToBlob(r.after);
-          if(blob){await clearAndPut('photos', (await txGetAll('photos')).concat([{id,blob}]));r.after=id;changed=true}
-        }
-      }
-      if(changed)await save();
-      await loadPhotoStore();
-      return;
-    }
-    // Migrate the previous v3/v2 data if present.
-    let migrated=null;
-    try{
-      const old=localStorage.getItem('pbt_v2');
-      if(old)migrated=JSON.parse(old);
-    }catch(e){}
-    if(!migrated){
-      try{
-        const oldDb=await indexedDB.open('personal_behavior_tracker_v3');
-        await new Promise(resolve=>{oldDb.onsuccess=()=>{const d=oldDb.result;if(d.objectStoreNames.contains('state')){const q=d.transaction('state','readonly').objectStore('state').get('db');q.onsuccess=()=>{migrated=q.result||null;resolve()};q.onerror=()=>resolve()}else resolve()};oldDb.onerror=()=>resolve()});
-      }catch(e){}
-    }
-    if(migrated&&migrated.behaviors){
-      db={behaviors:migrated.behaviors||[],records:migrated.records||[],settings:{...(migrated.settings||{}),version:APP_VERSION}};
-      const photos=[];
-      for(const r of db.records){
-        for(const side of ['before','after']){
-          if(typeof r[side]==='string'&&r[side].startsWith('data:')){
-            const id=r.id+':'+side,blob=dataURLToBlob(r[side]);
-            if(blob){photos.push({id,blob});r[side]=id}
-          }
-        }
-      }
-      await clearAndPut('behaviors',db.behaviors);
-      await clearAndPut('records',db.records);
-      await clearAndPut('photos',photos);
-      await clearAndPut('meta',[{key:'settings',value:db.settings}]);
-      try{localStorage.removeItem('pbt_v2')}catch(e){}
-    }else{
-      db={behaviors:[],records:[],settings:{version:APP_VERSION}};
-      await clearAndPut('meta',[{key:'settings',value:db.settings}]);
-    }
-    await loadPhotoStore();
-  }catch(e){
-    console.error(e);
-    alert('本地数据库初始化失败：'+e.message);
-  }
+    const photos=await txReadAll('photos');
+    for(const p of photos)if(p.blob)photoCache.set(p.id,URL.createObjectURL(p.blob));
+  }catch(e){console.warn('照片读取失败',e)}
 }
-async function save(){
-  await clearAndPut('behaviors',db.behaviors);
-  const cleanRecords=db.records.map(r=>{
-    const x={...r};
-    if(typeof x.before==='string'&&x.before.startsWith('data:'))delete x.before;
-    if(typeof x.after==='string'&&x.after.startsWith('data:'))delete x.after;
-    return x;
-  });
-  await clearAndPut('records',cleanRecords);
-  const photos=[];
+async function normalizeRecords(){
   for(const r of db.records){
     for(const side of ['before','after']){
       const value=r[side];
-      const id=(typeof value==='string'&&value.startsWith('data:'))?r.id+':'+side:value;
-      const blob=typeof value==='string'&&value.startsWith('data:')?dataURLToBlob(value):null;
-      if(blob)photos.push({id,blob});
-      else if(id && photoCache.has(id)){
-        try{
-          const resp=await fetch(photoCache.get(id));
-          photos.push({id,blob:await resp.blob()});
-        }catch(e){}
+      if(typeof value==='string'&&value.startsWith('data:')){
+        const id=r.id+':'+side;
+        await savePhoto(id,value);
+        r[side]=id;
       }
     }
   }
-  await clearAndPut('photos',photos);
+}
+async function initStorage(){
+  // First load the small local fallback so a refresh never starts from an empty UI
+  // if IndexedDB is temporarily unavailable.
+  const fallback=readLocalFallback();
+  if(fallback){
+    db={behaviors:fallback.behaviors||[],records:fallback.records||[],settings:{...(fallback.settings||{}),version:APP_VERSION}};
+  }
+  try{
+    const [ib,ir,meta]=await Promise.all([
+      txReadAll('behaviors'),
+      txReadAll('records'),
+      txRead('meta','settings')
+    ]);
+    const indexed={behaviors:ib||[],records:ir||[],settings:meta?.value||{}};
+
+    // Prefer the union of local fallback and IndexedDB. This protects against
+    // a partially completed write or Safari restoring one storage layer first.
+    db.behaviors=mergeById(indexed.behaviors,db.behaviors);
+    db.records=mergeById(indexed.records,db.records);
+    db.settings={...indexed.settings,...(db.settings||{}),version:APP_VERSION};
+
+    await normalizeRecords();
+
+    // Persist the merged state to both stores.
+    await txPutAll('behaviors',db.behaviors);
+    await txPutAll('records',db.records);
+    await txPutAll('meta',[{key:'settings',value:db.settings}]);
+    writeLocalFallback();
+    await loadPhotoStore();
+  }catch(e){
+    console.warn('IndexedDB unavailable, using local fallback',e);
+    if(!fallback){
+      db={behaviors:[],records:[],settings:{version:APP_VERSION}};
+      writeLocalFallback();
+    }
+  }
+}
+async function save(){
+  // Write the small fallback FIRST. Therefore even if IndexedDB fails,
+  // behavior names and record metadata survive a refresh.
+  writeLocalFallback();
+
+  await normalizeRecords();
+
+  await txPutAll('behaviors',db.behaviors);
+  await txPutAll('records',db.records);
   db.settings={...(db.settings||{}),version:APP_VERSION};
-  await clearAndPut('meta',[{key:'settings',value:db.settings}]);
+  await txPutAll('meta',[{key:'settings',value:db.settings}]);
+  writeLocalFallback();
   await loadPhotoStore();
 }
+
 function photoSrc(value){
   if(!value)return '';
   if(typeof value==='string'&&value.startsWith('data:'))return value;
@@ -217,8 +243,23 @@ function freqText(b){if(!b.hasTarget)return '不设频率目标';return b.freqTy
 function periodStart(b,date=new Date()){let d=new Date(date);d.setHours(0,0,0,0);if(!b.hasTarget)return isoDate(d);if(b.freqType==='day')return isoDate(d);if(b.freqType==='week'){let x=d.getDay();d.setDate(d.getDate()-((x+6)%7));return isoDate(d)}if(b.freqType==='month'){d.setDate(1);return isoDate(d)}d.setDate(d.getDate()-((b.period||7)-1));return isoDate(d)}
 function countFor(b,end=new Date()){if(!b.hasTarget)return db.records.filter(r=>r.behaviorId===b.id).length;let s=periodStart(b,end),e=isoDate(end);return db.records.filter(r=>r.behaviorId===b.id&&r.date>=s&&r.date<=e).length}
 function renderHeader(){let titles={today:'今日',history:'历史记录',calendar:'日历',stats:'统计',behaviors:'行为',settings:'设置'};document.getElementById('title').textContent=titles[currentPage];document.getElementById('subtitle').textContent=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric'});document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.page===currentPage))}
-function page(p){currentPage=p;render();history.replaceState(null,'','#'+p)}
-function render(){renderHeader();let m=document.getElementById('main');if(currentPage==='today')m.innerHTML=today();if(currentPage==='history')m.innerHTML=historyPage();if(currentPage==='calendar')m.innerHTML=calendar();if(currentPage==='stats')m.innerHTML=stats();if(currentPage==='behaviors')m.innerHTML=behaviors();if(currentPage==='settings')m.innerHTML=settingsPage()}
+function page(p){
+  const allowed=['today','history','calendar','stats','behaviors','settings'];
+  if(!allowed.includes(p))p='today';
+  currentPage=p;
+  render();
+  try{window.history.replaceState(null,'','#'+p)}catch(e){}
+}
+function render(){
+  renderHeader();
+  const m=document.getElementById('main');
+  if(currentPage==='today')m.innerHTML=today();
+  else if(currentPage==='history')m.innerHTML=historyPage();
+  else if(currentPage==='calendar')m.innerHTML=calendar();
+  else if(currentPage==='stats')m.innerHTML=stats();
+  else if(currentPage==='behaviors')m.innerHTML=behaviors();
+  else if(currentPage==='settings')m.innerHTML=settingsPage();
+}
 function behaviorCard(b){let c=countFor(b),t=+b.target||1,p=b.hasTarget?Math.min(100,c/t*100):0;return `<button class="behavior" style="--c:${color(b)}" onclick="openRecord('${b.id}')"><div class="icon">${esc(b.icon||'✓')}</div><div class="name">${esc(b.name)}</div><div class="small">${freqText(b)}</div>${b.hasTarget?`<div class="progress"><i style="width:${p}%;background:${color(b)}"></i></div><div class="small">${c>=t?'✓ 已达标':`已完成 ${c} / ${t}`}</div>`:`<div class="small" style="margin-top:14px">累计记录 ${c} 次</div>`}</button>`}
 function today(){let bs=activeBehaviors();if(!bs.length)return `<div class="empty">还没有行为。<br><br><button class="btn primary" onclick="openBehavior()">＋ 添加第一个行为</button></div>`;let cards=bs.map(behaviorCard).join('');let recent=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp).slice(0,8).map(recordHtml).join('');return `<div class="section"><div class="section-title">快速记录</div><div class="grid">${cards}</div></div><div class="section"><div class="section-title">最近记录</div>${recent||'<div class="empty">暂无记录</div>'}</div>`}
 function recordHtml(r){
@@ -230,16 +271,32 @@ function recordHtml(r){
    ${before||after?`<div class="thumb-row">${before?`<img class="thumb" src="${before}">`:''}${after?`<img class="thumb" src="${after}">`:''}</div>`:''}
  </div>`
 }
-function historyPage(){let bs=activeBehaviors(),rs=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp),filtered=historyFilter==='all'?rs:rs.filter(r=>r.behaviorId===historyFilter);return `<div class="filterbar"><button class="filter ${historyFilter==='all'?'active':''}" onclick="setHistoryFilter('all')">全部</button>${bs.map(b=>`<button class="filter ${historyFilter===b.id?'active':''}" onclick="setHistoryFilter('${b.id}')">${esc(b.icon||'✓')} ${esc(b.name)}</button>`).join('')}</div>${filtered.length?filtered.map(recordHtml).join(''):'<div class="empty">没有历史记录</div>'}`}
+function historyPage(){
+  const bs=activeBehaviors();
+  const rs=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp);
+  const filtered=historyFilter==='all'?rs:rs.filter(r=>r.behaviorId===historyFilter);
+  return `<div class="card"><div class="row between"><div><b>历史记录</b><div class="small" style="margin-top:4px">按行为筛选，点击行为可进入详情</div></div><button class="btn primary" onclick="openRecord()">＋ 新建</button></div></div>
+  <div class="filterbar"><button class="filter ${historyFilter==='all'?'active':''}" onclick="setHistoryFilter('all')">全部</button>${bs.map(b=>`<button class="filter ${historyFilter===b.id?'active':''}" onclick="setHistoryFilter('${b.id}')">${esc(b.icon||'✓')} ${esc(b.name)}</button>`).join('')}</div>
+  ${filtered.length?filtered.map(recordHtml).join(''):'<div class="empty">没有历史记录</div>'}`;
+}
 function setHistoryFilter(id){historyFilter=id;render()}
 
 function calendar(){
- let now=new Date(),y=now.getFullYear(),mo=now.getMonth(),first=new Date(y,mo,1),last=new Date(y,mo+1,0),offset=(first.getDay()+6)%7;
- let cells='';for(let i=0;i<offset;i++)cells+='<div class="day"></div>';
- for(let d=1;d<=last.getDate();d++){let date=isoDate(new Date(y,mo,d)),rs=db.records.filter(r=>r.date===date),today=date===isoDate(now);let dots=rs.slice(0,12).map(r=>'<i class="dot"></i>').join('');cells+=`<div class="day ${today?'today':''}" onclick="dayDetail('${date}')"><b>${d}</b><div class="dots">${dots}</div></div>`}
- return `<div class="row between" style="margin-bottom:12px"><button class="btn" onclick="changeMonth(-1)">‹</button><b>${y}年 ${mo+1}月</b><button class="btn" onclick="changeMonth(1)">›</button></div><div class="calendar"><div class="cal-head">${['一','二','三','四','五','六','日'].map(x=>`<div>${x}</div>`).join('')}</div><div class="cal-grid">${cells}</div></div><div class="small" style="margin-top:10px">点击日期查看当天记录</div>`
+  const now=new Date();
+  const y=now.getFullYear(),mo=now.getMonth();
+  const first=new Date(y,mo,1),last=new Date(y,mo+1,0);
+  const offset=(first.getDay()+6)%7;
+  let cells='';
+  for(let i=0;i<offset;i++)cells+='<div class=\"day\"></div>';
+  for(let d=1;d<=last.getDate();d++){
+    const date=isoDate(new Date(y,mo,d));
+    const rs=db.records.filter(r=>r.date===date);
+    const isToday=date===isoDate(now);
+    const dots=rs.slice(0,12).map(()=>'<i class=\"dot\"></i>').join('');
+    cells+=`<div class=\"day ${isToday?'today':''}\" onclick=\"dayDetail('${date}')\"><b>${d}</b><div class=\"dots\">${dots}</div></div>`;
+  }
+  return `<div class=\"row between\" style=\"margin-bottom:12px\"><button class=\"btn\" onclick=\"changeMonth(-1)\">‹</button><b>${y}年 ${mo+1}月</b><button class=\"btn\" onclick=\"changeMonth(1)\">›</button></div><div class=\"calendar\"><div class=\"cal-head\">${['一','二','三','四','五','六','日'].map(x=>`<div>${x}</div>`).join('')}</div><div class=\"cal-grid\">${cells}</div></div><div class=\"small\" style=\"margin-top:10px\">点击日期查看当天记录</div>`;
 }
-let calOffset=0;
 function changeMonth(n){calOffset+=n;let base=new Date();base.setMonth(base.getMonth()+calOffset);document.getElementById('main').innerHTML=calendarAt(base)}
 function calendarAt(now){let y=now.getFullYear(),mo=now.getMonth(),first=new Date(y,mo,1),last=new Date(y,mo+1,0),offset=(first.getDay()+6)%7,c='';for(let i=0;i<offset;i++)c+='<div class="day"></div>';for(let d=1;d<=last.getDate();d++){let date=isoDate(new Date(y,mo,d)),rs=db.records.filter(r=>r.date===date);c+=`<div class="day ${date===isoDate(new Date())?'today':''}" onclick="dayDetail('${date}')"><b>${d}</b><div class="dots">${rs.slice(0,12).map(()=>'<i class="dot"></i>').join('')}</div></div>`}return `<div class="row between" style="margin-bottom:12px"><button class="btn" onclick="changeMonth(-1)">‹</button><b>${y}年 ${mo+1}月</b><button class="btn" onclick="changeMonth(1)">›</button></div><div class="calendar"><div class="cal-head">${['一','二','三','四','五','六','日'].map(x=>`<div>${x}</div>`).join('')}</div><div class="cal-grid">${c}</div></div>`}
 function dayDetail(date){let rs=db.records.filter(r=>r.date===date).sort((a,b)=>b.timestamp-a.timestamp);openModal(`<h2>${date}</h2><div style="margin-top:12px">${rs.length?rs.map(r=>{let b=db.behaviors.find(x=>x.id===r.behaviorId);return `<div class="card"><div class="row between"><b>${b?esc(b.icon)+' '+esc(b.name):'已删除行为'}</b><span class="small">${new Date(r.timestamp).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</span></div>${r.note?`<p class="small" style="margin-top:7px">${esc(r.note)}</p>`:''}${r.before||r.after?`<div class="photo-grid" style="margin-top:10px">${photoSrc(r.before)?`<div><div class="small">之前</div><img src="${photoSrc(r.before)}" style="width:100%;border-radius:10px"></div>`:''}${photoSrc(r.after)?`<div><div class="small">之后</div><img src="${photoSrc(r.after)}" style="width:100%;border-radius:10px"></div>`:''}</div>`:''}</div>`}).join(''):'<div class="empty">当天没有记录</div>'}</div><div class="actions"><button class="btn" onclick="closeModal()">关闭</button></div>`)}
@@ -266,7 +323,7 @@ function behaviors(){let list=db.behaviors.map(b=>`<div class="card" style="bord
 function settingsPage(){
  return `<div class="card"><div class="row between"><div><b>应用信息</b><div class="small" style="margin-top:5px">个人行为记录</div></div><b>${APP_VERSION}</b></div></div>
  <div class="card"><b>数据存储</b><p class="small" style="margin-top:8px">数据保存在本设备浏览器的 IndexedDB 中。照片单独存储，不再占用 localStorage 的小容量配额。</p></div>
- <div class="card"><b>版本信息</b><div class="small" style="margin-top:8px">当前版本：${APP_VERSION}<br>数据结构：IndexedDB v4<br>更新内容：历史记录、月度趋势、年度对比、照片存储稳定性。</div></div>`
+ <div class="card"><b>版本信息</b><div class="small" style="margin-top:8px">当前版本：${APP_VERSION}<br>数据结构：IndexedDB v5 + 本地元数据备份<br>更新内容：历史记录、月度趋势、年度对比、照片独立存储、刷新数据持久化。</div></div>`
 }
 function behaviorDetail(id){
  let b=db.behaviors.find(x=>x.id===id);if(!b)return '';
@@ -317,9 +374,34 @@ document.getElementById('photoInput').addEventListener('change',async e=>{
     if(box)box.innerHTML=`<img src="${data}">`;
   }catch(err){alert('照片读取失败：'+err.message)}
 });
-async function saveRecord(){try{let bId=document.getElementById('recordBehavior').value,d=document.getElementById('rd').value,t=document.getElementById('rt').value||'00:00';if(!d){alert('请选择日期');return}let timestamp=new Date(`${d}T${t}`).getTime();if(!Number.isFinite(timestamp))throw new Error('日期或时间无效');db.records.push({id:uid(),behaviorId:bId,date:d,timestamp,note:document.getElementById('rn').value.trim(),before:pendingPhotos.before,after:pendingPhotos.after});await save();pendingPhotos={before:null,after:null};closeModal();render()}catch(e){alert('保存记录失败：'+e.message)}}
-window.addEventListener('hashchange',()=>{let p=location.hash.slice(1);if(['today','history','calendar','stats','behaviors','settings'].includes(p))page(p)})
-(async()=>{await initStorage();page(location.hash.slice(1)||'today')})();
+async function saveRecord(){
+  try{
+    const bId=document.getElementById('recordBehavior').value;
+    const d=document.getElementById('rd').value;
+    const t=document.getElementById('rt').value||'00:00';
+    if(!d){alert('请选择日期');return}
+    const timestamp=new Date(`${d}T${t}`).getTime();
+    if(!Number.isFinite(timestamp))throw new Error('日期或时间无效');
+    const id=uid();
+    const r={id,behaviorId:bId,date:d,timestamp,note:document.getElementById('rn').value.trim()};
+    if(pendingPhotos.before){r.before=id+':before';await savePhoto(r.before,pendingPhotos.before)}
+    if(pendingPhotos.after){r.after=id+':after';await savePhoto(r.after,pendingPhotos.after)}
+    db.records.push(r);
+    await save();
+    pendingPhotos={before:null,after:null};
+    closeModal();
+    render();
+  }catch(e){alert('保存记录失败：'+e.message)}
+}
+window.addEventListener('hashchange',()=>{
+  const p=location.hash.slice(1);
+  if(['today','history','calendar','stats','behaviors','settings'].includes(p))render();
+});
+(async()=>{
+  await initStorage();
+  const p=location.hash.slice(1);
+  page(['today','history','calendar','stats','behaviors','settings'].includes(p)?p:'today');
+})();
 </script>
 </body>
 </html>
