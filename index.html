@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>个人行为记录</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#202124;--muted:#70757a;--line:#e5e7eb;--accent:#2563eb;--good:#16a34a;--warn:#d97706;--bad:#dc2626}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input,select,textarea{font:inherit}button{border:0;cursor:pointer}
+.app{max-width:900px;margin:auto;min-height:100vh;padding-bottom:78px}
+header{position:sticky;top:0;z-index:5;background:rgba(255,255,255,.94);backdrop-filter:blur(12px);padding:16px;border-bottom:1px solid var(--line)}
+h1,h2,h3,p{margin:0}.header-row{display:flex;align-items:center;justify-content:space-between}.sub{color:var(--muted);font-size:13px;margin-top:4px}
+main{padding:16px}.section{margin-bottom:20px}.section-title{font-size:18px;font-weight:700;margin-bottom:10px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.behavior{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;text-align:left;min-height:120px;position:relative}
+.behavior .icon{font-size:28px}.behavior .name{font-weight:700;margin-top:7px}.progress{height:7px;background:#eef0f2;border-radius:99px;margin:9px 0 5px;overflow:hidden}.progress i{display:block;height:100%;background:var(--accent);border-radius:99px}.small{font-size:12px;color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:10px}
+.row{display:flex;align-items:center;gap:10px}.between{justify-content:space-between}.pill{padding:5px 9px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:12px}.good{color:var(--good)}.warn{color:var(--warn)}
+.btn{padding:10px 13px;border-radius:12px;background:#eef0f2}.primary{background:var(--accent);color:#fff}.danger{background:#fee2e2;color:#b91c1c}.iconbtn{width:40px;height:40px;border-radius:12px;background:#f1f3f4}
+.nav{position:fixed;bottom:0;left:0;right:0;z-index:10;background:rgba(255,255,255,.97);border-top:1px solid var(--line);display:flex;justify-content:center}
+.nav-inner{width:min(900px,100%);display:grid;grid-template-columns:repeat(4,1fr)}.nav button{background:none;padding:10px 4px;color:var(--muted);font-size:12px}.nav button.active{color:var(--accent);font-weight:700}.nav .ni{display:block;font-size:20px}
+.calendar{background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden}.cal-head,.cal-grid{display:grid;grid-template-columns:repeat(7,1fr)}.cal-head div{text-align:center;padding:9px;color:var(--muted);font-size:12px}.day{min-height:66px;border-top:1px solid var(--line);border-right:1px solid var(--line);padding:5px;font-size:12px}.day:nth-child(7n){border-right:0}.day.today{background:#eff6ff}.dots{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}.dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.stat{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px}.stat b{display:block;font-size:25px;margin-top:5px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:20;display:none;align-items:flex-end}.modal.show{display:flex}.sheet{background:#fff;width:100%;max-height:92vh;overflow:auto;border-radius:22px 22px 0 0;padding:18px;max-width:700px;margin:auto}
+label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,select,textarea{width:100%;padding:11px;border:1px solid #d8dce1;border-radius:10px;background:#fff}textarea{min-height:80px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.actions{display:flex;gap:8px;margin-top:16px}.actions>*{flex:1}
+.photo-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.photo-box{border:1px dashed #c8ccd1;border-radius:12px;min-height:130px;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fafafa}.photo-box img{width:100%;height:160px;object-fit:cover}
+.empty{text-align:center;padding:30px;color:var(--muted)}
+@media(min-width:700px){.grid{grid-template-columns:repeat(3,1fr)}main{padding:22px}.modal{align-items:center}.sheet{border-radius:20px}}
+</style>
+</head>
+<body>
+<div class="app">
+<header><div class="header-row"><div><h1 id="title">今日</h1><div class="sub" id="subtitle"></div></div><button class="iconbtn" onclick="openRecord()">＋</button></div></header>
+<main id="main"></main>
+</div>
+<nav class="nav"><div class="nav-inner">
+<button data-page="today" onclick="page('today')"><span class="ni">☀️</span>今日</button>
+<button data-page="calendar" onclick="page('calendar')"><span class="ni">🗓️</span>日历</button>
+<button data-page="stats" onclick="page('stats')"><span class="ni">📊</span>统计</button>
+<button data-page="behaviors" onclick="page('behaviors')"><span class="ni">⚙️</span>行为</button>
+</div></nav>
+
+<div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
+<input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+<script>
+const KEY='pbt_v1';
+let db=JSON.parse(localStorage.getItem(KEY)||'{"behaviors":[],"records":[],"settings":{"version":"v1.0.0"}}');
+let currentPage='today', selectedBehavior=null, photoTarget=null;
+
+function save(){localStorage.setItem(KEY,JSON.stringify(db))}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
+function isoDate(d=new Date()){return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10)}
+function daysAgo(n){let d=new Date();d.setDate(d.getDate()-n);return isoDate(d)}
+function freqText(b){return b.freqType==='day'?`每天 ${b.target} 次`:b.freqType==='week'?`每周 ${b.target} 次`:b.freqType==='month'?`每月 ${b.target} 次`:`每 ${b.period} 天 ${b.target} 次`}
+function periodStart(b,date=new Date()){
+ let d=new Date(date); d.setHours(0,0,0,0);
+ if(b.freqType==='day') return isoDate(d);
+ if(b.freqType==='week'){let x=d.getDay();d.setDate(d.getDate()-((x+6)%7));return isoDate(d)}
+ if(b.freqType==='month'){d.setDate(1);return isoDate(d)}
+ let n=b.period||7;d.setDate(d.getDate()-(n-1));return isoDate(d)
+}
+function countFor(b,end=new Date()){
+ let start=periodStart(b,end), e=isoDate(end);
+ return db.records.filter(r=>r.behaviorId===b.id&&r.date>=start&&r.date<=e).length
+}
+function targetText(b){let c=countFor(b),t=Number(b.target)||1;return `${c} / ${t}`}
+function renderHeader(){let titles={today:'今日',calendar:'日历',stats:'统计',behaviors:'行为'};document.getElementById('title').textContent=titles[currentPage];document.getElementById('subtitle').textContent=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric'});document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.page===currentPage))}
+function page(p){currentPage=p;render();history.replaceState(null,'','#'+p)}
+function render(){renderHeader();let m=document.getElementById('main');if(currentPage==='today')m.innerHTML=today();if(currentPage==='calendar')m.innerHTML=calendar();if(currentPage==='stats')m.innerHTML=stats();if(currentPage==='behaviors')m.innerHTML=behaviors()}
+function today(){
+ if(!db.behaviors.length)return `<div class="empty">还没有行为。<br><br><button class="btn primary" onclick="openBehavior()">＋ 添加第一个行为</button></div>`;
+ let cards=db.behaviors.filter(b=>!b.archived).map(b=>{let c=countFor(b),t=+b.target||1,p=Math.min(100,c/t*100);return `<button class="behavior" onclick="quickRecord('${b.id}')"><div class="icon">${esc(b.icon||'✓')}</div><div class="name">${esc(b.name)}</div><div class="small">${freqText(b)}</div><div class="progress"><i style="width:${p}%"></i></div><div class="small">${c>=t?'✓ 已达标':`已完成 ${c} / ${t}`}</div></button>`}).join('');
+ let recent=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp).slice(0,8).map(r=>{let b=db.behaviors.find(x=>x.id===r.behaviorId);return b?`<div class="card"><div class="row between"><b>${esc(b.icon||'✓')} ${esc(b.name)}</b><span class="small">${new Date(r.timestamp).toLocaleString('zh-CN')}</span></div>${r.note?`<div class="small" style="margin-top:7px">${esc(r.note)}</div>`:''}</div>`:''}).join('');
+ return `<div class="section"><div class="section-title">快速记录</div><div class="grid">${cards}</div></div><div class="section"><div class="section-title">最近记录</div>${recent||'<div class="empty">暂无记录</div>'}</div>`
+}
+function quickRecord(id){openRecord(id)}
+function calendar(){
+ let now=new Date(),y=now.getFullYear(),mo=now.getMonth(),first=new Date(y,mo,1),last=new Date(y,mo+1,0),offset=(first.getDay()+6)%7;
+ let cells='';for(let i=0;i<offset;i++)cells+='<div class="day"></div>';
+ for(let d=1;d<=last.getDate();d++){let date=isoDate(new Date(y,mo,d)),rs=db.records.filter(r=>r.date===date),today=date===isoDate(now);let dots=rs.slice(0,12).map(r=>'<i class="dot"></i>').join('');cells+=`<div class="day ${today?'today':''}" onclick="dayDetail('${date}')"><b>${d}</b><div class="dots">${dots}</div></div>`}
+ return `<div class="row between" style="margin-bottom:12px"><button class="btn" onclick="changeMonth(-1)">‹</button><b>${y}年 ${mo+1}月</b><button class="btn" onclick="changeMonth(1)">›</button></div><div class="calendar"><div class="cal-head">${['一','二','三','四','五','六','日'].map(x=>`<div>${x}</div>`).join('')}</div><div class="cal-grid">${cells}</div></div><div class="small" style="margin-top:10px">点击日期查看当天记录</div>`
+}
+let calOffset=0;
+function changeMonth(n){calOffset+=n;let base=new Date();base.setMonth(base.getMonth()+calOffset);document.getElementById('main').innerHTML=calendarAt(base)}
+function calendarAt(now){let y=now.getFullYear(),mo=now.getMonth(),first=new Date(y,mo,1),last=new Date(y,mo+1,0),offset=(first.getDay()+6)%7,c='';for(let i=0;i<offset;i++)c+='<div class="day"></div>';for(let d=1;d<=last.getDate();d++){let date=isoDate(new Date(y,mo,d)),rs=db.records.filter(r=>r.date===date);c+=`<div class="day ${date===isoDate(new Date())?'today':''}" onclick="dayDetail('${date}')"><b>${d}</b><div class="dots">${rs.slice(0,12).map(()=>'<i class="dot"></i>').join('')}</div></div>`}return `<div class="row between" style="margin-bottom:12px"><button class="btn" onclick="changeMonth(-1)">‹</button><b>${y}年 ${mo+1}月</b><button class="btn" onclick="changeMonth(1)">›</button></div><div class="calendar"><div class="cal-head">${['一','二','三','四','五','六','日'].map(x=>`<div>${x}</div>`).join('')}</div><div class="cal-grid">${c}</div></div>`}
+function dayDetail(date){let rs=db.records.filter(r=>r.date===date).sort((a,b)=>b.timestamp-a.timestamp);openModal(`<h2>${date}</h2><div style="margin-top:12px">${rs.length?rs.map(r=>{let b=db.behaviors.find(x=>x.id===r.behaviorId);return `<div class="card"><div class="row between"><b>${b?esc(b.icon)+' '+esc(b.name):'已删除行为'}</b><span class="small">${new Date(r.timestamp).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</span></div>${r.note?`<p class="small" style="margin-top:7px">${esc(r.note)}</p>`:''}${r.before||r.after?`<div class="photo-grid" style="margin-top:10px">${r.before?`<div><div class="small">之前</div><img src="${r.before}" style="width:100%;border-radius:10px"></div>`:''}${r.after?`<div><div class="small">之后</div><img src="${r.after}" style="width:100%;border-radius:10px"></div>`:''}</div>`:''}</div>`}).join(''):'<div class="empty">当天没有记录</div>'}</div><div class="actions"><button class="btn" onclick="closeModal()">关闭</button></div>`)}
+function stats(){
+ let total=db.records.length, active=db.behaviors.filter(b=>!b.archived),met=active.filter(b=>countFor(b)>=b.target).length;
+ let monthPrefix=isoDate(new Date()).slice(0,7),monthRecords=db.records.filter(r=>r.date.startsWith(monthPrefix)).length;
+ return `<div class="stats"><div class="stat">总记录<b>${total}</b></div><div class="stat">本月记录<b>${monthRecords}</b></div><div class="stat">行为数量<b>${active.length}</b></div><div class="stat">当前达标<b>${met}/${active.length}</b></div></div><div style="margin-top:18px">${active.map(b=>{let c=countFor(b),t=+b.target||1,p=Math.min(100,c/t*100);return `<div class="card"><div class="row between"><b>${esc(b.icon||'✓')} ${esc(b.name)}</b><span class="${c>=t?'good':'warn'}">${c}/${t}</span></div><div class="progress"><i style="width:${p}%"></i></div><div class="small">${freqText(b)}</div></div>`}).join('')}</div>`
+}
+function behaviors(){
+ let list=db.behaviors.map(b=>`<div class="card"><div class="row"><span style="font-size:26px">${esc(b.icon||'✓')}</span><div style="flex:1"><b>${esc(b.name)}</b><div class="small">${freqText(b)} · ${b.photo?'需要照片':'无需照片'}</div></div><button class="btn" onclick="openBehavior('${b.id}')">编辑</button></div></div>`).join('');
+ return `<div class="row between" style="margin-bottom:12px"><div class="section-title" style="margin:0">我的行为</div><button class="btn primary" onclick="openBehavior()">＋ 添加</button></div>${list||'<div class="empty">还没有创建行为</div>'}`
+}
+function openModal(html){document.getElementById('sheet').innerHTML=html;document.getElementById('modal').classList.add('show')}
+function closeModal(){document.getElementById('modal').classList.remove('show')}
+document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal()})
+
+function openBehavior(id){
+ let b=id?db.behaviors.find(x=>x.id===id):null;
+ openModal(`<h2>${b?'编辑行为':'添加行为'}</h2><label>行为名称</label><input id="bn" value="${esc(b?.name||'')}" placeholder="例如：洗衣服"><div class="form-grid"><div><label>图标</label><input id="bi" value="${esc(b?.icon||'✓')}"></div><div><label>分类（可选）</label><input id="bc" value="${esc(b?.category||'')}"></div></div><label>频率</label><select id="ft" onchange="toggleFreq()"><option value="day" ${b?.freqType==='day'?'selected':''}>每天</option><option value="week" ${(!b||b.freqType==='week')?'selected':''}>每周</option><option value="month" ${b?.freqType==='month'?'selected':''}>每月</option><option value="custom" ${b?.freqType==='custom'?'selected':''}>每 N 天</option></select><div class="form-grid"><div><label>目标次数</label><input id="bt" type="number" min="1" value="${b?.target||1}"></div><div id="periodWrap"><label>周期天数（自定义）</label><input id="bp" type="number" min="1" value="${b?.period||7}"></div></div><label><input id="bphoto" type="checkbox" style="width:auto" ${b?.photo?'checked':''}> 记录时允许添加照片</label><div class="actions">${b?`<button class="btn danger" onclick="archiveBehavior('${b.id}')">停用</button>`:''}<button class="btn" onclick="closeModal()">取消</button><button class="btn primary" onclick="saveBehavior('${id||''}')">保存</button></div>`);
+ toggleFreq()
+}
+function toggleFreq(){document.getElementById('periodWrap').style.display=document.getElementById('ft').value==='custom'?'block':'none'}
+function saveBehavior(id){
+ let name=document.getElementById('bn').value.trim();if(!name)return alert('请输入行为名称');
+ let b=id?db.behaviors.find(x=>x.id===id):{id:uid(),archived:false};
+ Object.assign(b,{name,icon:document.getElementById('bi').value||'✓',category:document.getElementById('bc').value.trim(),freqType:document.getElementById('ft').value,target:Math.max(1,+document.getElementById('bt').value||1),period:Math.max(1,+document.getElementById('bp').value||7),photo:document.getElementById('bphoto').checked});
+ if(!id)db.behaviors.push(b);save();closeModal();render()
+}
+function archiveBehavior(id){let b=db.behaviors.find(x=>x.id===id);if(b)b.archived=true;save();closeModal();render()}
+
+function openRecord(id){
+ let b=id?db.behaviors.find(x=>x.id===id):null;
+ if(!b){if(!db.behaviors.filter(x=>!x.archived).length){alert('请先添加行为');return}b=db.behaviors.find(x=>!x.archived)}
+ selectedBehavior=b.id;
+ openModal(`<h2>记录：${esc(b.name)}</h2><div class="small" style="margin-top:4px">${freqText(b)}</div><label>日期</label><input id="rd" type="date" value="${isoDate()}"><label>时间</label><input id="rt" type="time" value="${new Date().toTimeString().slice(0,5)}"><label>备注</label><textarea id="rn" placeholder="可选"></textarea>${b.photo?`<label>照片（可选）</label><div class="photo-grid"><div><div class="small">之前</div><div class="photo-box" id="beforeBox"><button class="btn" onclick="choosePhoto('before')">＋ 添加</button></div></div><div><div class="small">之后</div><div class="photo-box" id="afterBox"><button class="btn" onclick="choosePhoto('after')">＋ 添加</button></div></div></div>`:''}<div class="actions"><button class="btn" onclick="closeModal()">取消</button><button class="btn primary" onclick="saveRecord()">保存记录</button></div>`)
+}
+let pendingPhotos={before:null,after:null};
+function choosePhoto(which){photoTarget=which;document.getElementById('photoInput').value='';document.getElementById('photoInput').click()}
+document.getElementById('photoInput').addEventListener('change',e=>{let f=e.target.files[0];if(!f)return;let rd=new FileReader();rd.onload=()=>{pendingPhotos[photoTarget]=rd.result;let box=document.getElementById(photoTarget+'Box');if(box)box.innerHTML=`<img src="${rd.result}">`};rd.readAsDataURL(f)})
+function saveRecord(){
+ let d=document.getElementById('rd').value,t=document.getElementById('rt').value;
+ if(!d)return;let timestamp=new Date(`${d}T${t||'00:00'}`).getTime();
+ db.records.push({id:uid(),behaviorId:selectedBehavior,date:d,timestamp,note:document.getElementById('rn').value.trim(),before:pendingPhotos.before,after:pendingPhotos.after});
+ pendingPhotos={before:null,after:null};save();closeModal();render()
+}
+window.addEventListener('hashchange',()=>{let p=location.hash.slice(1);if(['today','calendar','stats','behaviors'].includes(p))page(p)})
+page(location.hash.slice(1)||'today');
+</script>
+</body>
+</html>
