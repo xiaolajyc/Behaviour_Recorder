@@ -78,6 +78,12 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 .detail-modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;position:sticky;top:0;background:#fff;padding:2px 0 10px;z-index:3;border-bottom:1px solid #eef0f3}
 .detail-color-dot{width:12px;height:12px;border-radius:50%;flex:0 0 12px}
 #sheet{max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
+
+.record-delete-btn{
+  position:relative;
+  z-index:auto;
+  pointer-events:auto;
+}
 </style>
 </head>
 <body>
@@ -96,7 +102,7 @@ label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}input,se
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v13.0.0';
+const APP_VERSION='v14.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -358,7 +364,7 @@ function recordHtml(r){
   return `<div class="record card" data-date="${esc(r.date)}" style="border-left:4px solid ${b.color||'#2563eb'}">
     <div class="row between">
       <button class="behavior-link" onclick="openBehaviorDetail('${b.id}')" style="color:${b.color||'#2563eb'}">${esc(b.icon||'✓')} ${esc(b.name)}</button>
-      <button type="button" class="iconbtn" style="position:relative;z-index:20;pointer-events:auto" onclick="event.stopPropagation();deleteRecord('${r.id}')" aria-label="删除">🗑️</button>
+      <button type="button" class="iconbtn record-delete-btn" onclick="event.stopPropagation();deleteRecord('${r.id}')" aria-label="删除">🗑️</button>
     </div>
     <div class="small">${esc(r.date)} ${r.time?esc(r.time):''}</div>
     ${r.note?`<div class="note">${esc(r.note)}</div>`:''}
