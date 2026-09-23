@@ -517,6 +517,7 @@ input:focus,select:focus,textarea:focus{
 <meta name="apple-mobile-web-app-title" content="个人行为记录">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
 
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <div class="app">
@@ -528,13 +529,13 @@ input:focus,select:focus,textarea:focus{
 <button data-page="history" onclick="page('history')"><span class="ni">📜</span>历史</button>
 <button data-page="calendar" onclick="page('calendar')"><span class="ni">🗓️</span>日历</button>
 <button data-page="stats" onclick="page('stats')"><span class="ni">📊</span>统计</button>
-<button data-page="behaviors" onclick="page('behaviors')"><span class="ni">⚙️</span>行为</button>
+<button data-page="behaviors" onclick="page('behaviors')"><span class="ni">📝</span>行为</button>
 </div></nav>
 
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v18.0.0';
+const APP_VERSION='v19.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -1114,7 +1115,7 @@ function settingsPage(){
      <button type="button" class="btn" onclick="driveDownload()">从云端恢复</button>
    </div>
    <div id="syncProgress" class="sync-progress"><div class="sync-progress-track"><div id="syncBar" class="sync-progress-bar"></div></div><div class="sync-progress-text"><span id="syncText">准备同步…</span><span id="syncPct">0%</span></div></div>
-   <div class="small" style="margin-top:9px">与 TodoCalendar 使用相同的 Google Identity Services + Drive API + drive.file 方案。<div class="google-sync-note">首次连接选择一次 Google 账号即可；应用会记住该账号，之后同步优先跳过账号选择。</div>同步行为、历史记录、设置以及前后照片。</div>
+   <div class="small" style="margin-top:9px">与 TodoCalendar 使用相同的 Google Identity Services + Drive API + drive.file 方案。<div class="google-sync-note">首次连接选择一次 Google 账号即可；之后会优先静默恢复授权。只有 Google 登录状态/授权已失效时才需要再次确认。</div>同步行为、历史记录、设置以及前后照片。</div>
  </div>
  <div class="card"><b>版本信息</b><div class="small" style="margin-top:8px">当前版本：${APP_VERSION}<br>数据结构：IndexedDB v5 + 本地元数据备份<br>更新内容：Google Drive 多设备同步、照片同步、历史记录、月度趋势、年度对比。</div></div>`
 }
@@ -1360,10 +1361,120 @@ async function driveDownload(){
   }catch(e){driveSetStatus('同步失败：'+(e.message||e),'error');syncProgress(0,'',false);alert('Google Drive 恢复失败：'+(e.message||e))}
   finally{driveBusy=false}
 }
-async function driveConnect(){
-  if(driveBusy)return;driveBusy=true;
-  try{syncProgress(5,'正在加载 Google 授权…');driveSetStatus('正在连接 Google Drive…');await driveGetToken(true);syncProgress(55,'正在查找云端同步文件…');const f=await driveFindSyncFile();driveFileId=f?.id||null;driveSetStatus(f?'已连接 · 找到云端同步文件':'已连接 · 尚未创建云端同步文件','ok');syncProgress(100,f?'已连接 · 找到云端文件':'已连接 · 尚未创建云端文件');setTimeout(()=>syncProgress(0,'',false),1000);try{toast('Google Drive 已连接 ✓')}catch(_e){}}catch(e){driveSetStatus('连接失败：'+(e.message||e),'error');syncProgress(0,'',false);alert('Google Drive 连接失败：'+(e.message||e))}
-  finally{driveBusy=false}
+async function driveAutoRestore(){
+  const hint=localStorage.getItem('pbt_google_login_hint');
+  if(!hint)return;
+  try{
+    await driveEnsureGIS();
+    if(!window.google?.accounts?.oauth2)return;
+    await new Promise((resolve,reject)=>{
+      let done=false;
+      const client=google.accounts.oauth2.initTokenClient({
+        client_id:DRIVE_CLIENT_ID,
+        scope:DRIVE_SCOPE,
+        login_hint:hint,
+        callback:r=>{
+          if(done)return;
+          done=true;
+          if(r.error){reject(new Error(r.error_description||r.error));return;}
+          driveToken=r.access_token;
+          driveTokenExpiresAt=Date.now()+Number(r.expires_in||3600)*1000;
+          resolve();
+        },
+        error_callback:e=>{
+          if(done)return;
+          done=true;
+          reject(new Error(e?.message||'silent authorization failed'));
+        }
+      });
+      client.requestAccessToken({prompt:''});
+    });
+    try{
+      const f=await driveFindSyncFile();
+      driveFileId=f?.id||null;
+    }catch(_e){}
+  }catch(_e){
+    // Silent restore must never show a popup or error on app startup.
+  }
+}
+
+function driveConnect(){
+  if(driveBusy)return;
+  driveBusy=true;
+  syncProgress(5,'正在打开 Google 授权…');
+  driveSetStatus('正在连接 Google Drive…');
+
+  const start=()=>{
+    try{
+      const client=google.accounts.oauth2.initTokenClient({
+        client_id:DRIVE_CLIENT_ID,
+        scope:DRIVE_SCOPE,
+        login_hint:localStorage.getItem('pbt_google_login_hint')||undefined,
+        callback:async r=>{
+          if(r.error){
+            driveBusy=false;
+            driveSetStatus('连接失败：'+(r.error_description||r.error),'error');
+            syncProgress(0,'',false);
+            alert('Google Drive 连接失败：'+(r.error_description||r.error));
+            return;
+          }
+          driveToken=r.access_token;
+          driveTokenExpiresAt=Date.now()+Number(r.expires_in||3600)*1000;
+          rememberGoogleAccount(r.access_token);
+          try{
+            syncProgress(55,'正在查找云端同步文件…');
+            const f=await driveFindSyncFile();
+            driveFileId=f?.id||null;
+            driveSetStatus(
+              f?'已连接 · 找到云端同步文件':'已连接 · 尚未创建云端同步文件',
+              'ok'
+            );
+            syncProgress(100,f?'已连接 · 找到云端文件':'已连接 · 尚未创建云端文件');
+            setTimeout(()=>syncProgress(0,'',false),1000);
+            toast('Google Drive 已连接 ✓');
+          }catch(e){
+            driveSetStatus('连接失败：'+(e.message||e),'error');
+            syncProgress(0,'',false);
+            alert('Google Drive 连接失败：'+(e.message||e));
+          }finally{
+            driveBusy=false;
+          }
+        },
+        error_callback:e=>{
+          driveBusy=false;
+          driveSetStatus('Google 授权窗口未打开','error');
+          syncProgress(0,'',false);
+          alert('Google 授权窗口未打开。请允许此网站打开弹窗，然后再试一次。');
+        }
+      });
+
+      // Important: requestAccessToken is executed directly from the button
+      // event path. This greatly reduces popup-blocker failures on iOS Safari.
+      client.requestAccessToken({prompt:''});
+    }catch(e){
+      driveBusy=false;
+      driveSetStatus('连接失败：'+(e.message||e),'error');
+      syncProgress(0,'',false);
+      alert('Google Drive 连接失败：'+(e.message||e));
+    }
+  };
+
+  if(window.google?.accounts?.oauth2){
+    start();
+  }else{
+    driveEnsureGIS().then(()=>{
+      // GIS was not ready at click time. The next click will be synchronous.
+      driveBusy=false;
+      driveSetStatus('Google 授权组件加载完成，请再点一次连接','');
+      syncProgress(0,'',false);
+      toast('Google 授权组件已加载，请再点一次连接');
+    }).catch(e=>{
+      driveBusy=false;
+      driveSetStatus('Google 授权组件加载失败','error');
+      syncProgress(0,'',false);
+      alert('Google Identity Services 加载失败：'+(e.message||e));
+    });
+  }
 }
 
 window.addEventListener('hashchange',()=>{
@@ -1372,6 +1483,7 @@ window.addEventListener('hashchange',()=>{
 });
 (async()=>{
   await initStorage();
+  driveAutoRestore();
   const p=location.hash.slice(1);
   page(['today','history','calendar','stats','behaviors','settings'].includes(p)?p:'today');
 })();
