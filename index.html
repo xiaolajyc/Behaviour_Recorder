@@ -517,6 +517,17 @@ input:focus,select:focus,textarea:focus{
   font-size:11px;font-weight:700;letter-spacing:.2px;
   color:#6f7785;background:#e9edf5;border-radius:7px;padding:3px 6px;
 }
+<style>.photo-time{margin-top:6px;text-align:center;font-size:11px;line-height:1.35;color:#697386;background:#f3f5f8;border-radius:7px;padding:4px 5px}
+.record-note-row{
+  display:flex;align-items:flex-start;gap:8px;margin-top:8px;
+  padding:8px 10px;border-radius:10px;background:#fafbfc;
+}
+.record-note-row .note{flex:1;margin:0;line-height:1.45;min-width:0;}
+.empty-note{color:#9aa2af;font-style:italic;}
+.note-edit-btn{
+  flex:0 0 auto;border:0;border-radius:8px;padding:5px 9px;
+  background:#eef1f5;color:#4d5664;font-size:12px;font-weight:600;
+}
 </style>
 
 <link rel="manifest" href="./manifest.json">
@@ -545,7 +556,7 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v20.0.0';
+const APP_VERSION='v22.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -764,6 +775,20 @@ function render(){
 }
 function behaviorCard(b){let c=countFor(b),t=+b.target||1,p=b.hasTarget?Math.min(100,c/t*100):0;return `<button class="behavior" style="--c:${color(b)}" onclick="openRecord('${b.id}')"><div class="icon">${esc(b.icon||'✓')}</div><div class="name">${esc(b.name)}</div><div class="small">${freqText(b)}</div>${b.hasTarget?`<div class="progress"><i style="width:${p}%;background:${color(b)}"></i></div><div class="small">${c>=t?'✓ 已达标':`已完成 ${c} / ${t}`}</div>`:`<div class="small" style="margin-top:14px">累计记录 ${c} 次</div>`}</button>`}
 function today(){let bs=activeBehaviors();if(!bs.length)return `<div class="empty">还没有行为。<br><br><button class="btn primary" onclick="openBehavior()">＋ 添加第一个行为</button></div>`;let cards=bs.map(behaviorCard).join('');let recent=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp).slice(0,8).map(recordHtml).join('');return `<div class="section"><div class="section-title">快速记录</div><div class="grid">${cards}</div></div><div class="section"><div class="section-title">最近记录</div>${recent||'<div class="empty">暂无记录</div>'}</div>`}
+async function editRecordNote(id){
+  const r=(db.records||[]).find(x=>x.id===id);
+  if(!r)return;
+  const value=prompt('编辑备注',r.note||'');
+  if(value===null)return;
+  r.note=value.trim();
+  try{
+    await save();
+    render();
+    toast('备注已更新 ✓');
+  }catch(e){
+    alert('备注保存失败：'+(e.message||e));
+  }
+}
 async function deleteRecord(id){
   const r=(db.records||[]).find(x=>x.id===id);
   if(!r)return;
@@ -808,6 +833,11 @@ function formatRecordDateTime(r){
   const x=new Date(d);
   return `${x.getFullYear()}年${x.getMonth()+1}月${x.getDate()}日 ${String(x.getHours()).padStart(2,'0')}:${String(x.getMinutes()).padStart(2,'0')}`;
 }
+function formatPhotoTime(value){
+  const t=Number(value);if(!Number.isFinite(t)||t<=0)return '';
+  const d=new Date(t);if(Number.isNaN(d.getTime()))return '';
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日 ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
 function recordHtml(r){
   const b=db.behaviors.find(x=>x.id===r.behaviorId);
   if(!b)return '';
@@ -822,18 +852,23 @@ function recordHtml(r){
       <span class="record-time-label">完成时间</span>
       <span>${esc(formatRecordDateTime(r))}</span>
     </div>
-    ${r.note?`<div class="note">${esc(r.note)}</div>`:''}
+    <div class="record-note-row">
+      <div class="note" id="note-${r.id}">${r.note?esc(r.note):'<span class="empty-note">暂无备注</span>'}</div>
+      <button type="button" class="note-edit-btn" onclick="event.stopPropagation();editRecordNote('${r.id}')">编辑</button>
+    </div>
     ${(before||after)?`
       <div class="compare-title">前后对比</div>
       <div class="photo-compare">
         <div class="compare-photo before-photo">
           <div class="photo-label">之前</div>
           ${before?`<img src="${before}" onclick="viewPhoto('${r.before}')" alt="之前">`:'<div class="no-photo">未添加</div>'}
+          ${before&&r.beforeTime?`<div class="photo-time">📷 ${esc(formatPhotoTime(r.beforeTime))}</div>`:''}
         </div>
         <div class="compare-arrow">→</div>
         <div class="compare-photo after-photo">
           <div class="photo-label">之后</div>
           ${after?`<img src="${after}" onclick="viewPhoto('${r.after}')" alt="之后">`:'<div class="no-photo">未添加</div>'}
+          ${after&&r.afterTime?`<div class="photo-time">📷 ${esc(formatPhotoTime(r.afterTime))}</div>`:''}
         </div>
       </div>`:''}
   </div>`;
@@ -1087,6 +1122,48 @@ function choosePhoto(which){
   input.value='';
   input.click();
 }
+async function getPhotoTakenTime(file){
+  try{
+    if(file&&file.type==='image/jpeg'){
+      const v=new DataView(await file.arrayBuffer());
+      if(v.getUint16(0,false)===0xFFD8){
+        let p=2;
+        while(p+4<=v.byteLength){
+          const marker=v.getUint16(p,false);p+=2;
+          if(marker===0xFFE1){
+            const e=p+2;
+            if(v.getUint32(e,false)===0x45786966&&v.getUint16(e+6,false)===0){
+              const t=e+6,little=v.getUint16(t,false)===0x4949;
+              const u16=o=>v.getUint16(t+o,little),u32=o=>v.getUint32(t+o,little);
+              const i=t+u32(4),n=u16(i);let ex=null;
+              for(let j=0;j<n;j++){const q=i+2+j*12;if(u16(q)===0x8769)ex=u32(q+8);}
+              if(ex!==null){
+                const ei=t+ex,en=u16(ei);
+                for(let j=0;j<en;j++){
+                  const q=ei+2+j*12;
+                  if(u16(q)===0x9003){
+                    const num=u32(q+4),off=u32(q+8),base=t+off;let s='';
+                    for(let k=0;k<Math.min(num,19);k++){const c=v.getUint8(base+k);if(!c)break;s+=String.fromCharCode(c);}
+                    const m=s.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+                    if(m){
+                      const d=new Date(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+m[6]);
+                      if(Number.isFinite(d.getTime()))return d.getTime();
+                    }
+                  }
+                }
+              }
+            }
+            break;
+          }
+          if(marker===0xFFDA||marker===0xFFD9)break;
+          const len=v.getUint16(p,false);if(len<2)break;p+=len;
+        }
+      }
+    }
+  }catch(_e){}
+  return file&&Number.isFinite(file.lastModified)?file.lastModified:null;
+}
+
 async function fileToDataURL(file){
   return new Promise((resolve,reject)=>{
     const fr=new FileReader();
@@ -1180,9 +1257,10 @@ document.getElementById('photoInput').addEventListener('change',async e=>{
   const f=e.target.files[0];if(!f)return;
   try{
     const data=await fileToDataURL(f);
-    pendingPhotos[photoTarget]=data;
+    const photoTime=await getPhotoTakenTime(f);
+    pendingPhotos[photoTarget]={data,time:photoTime};
     const box=document.getElementById(photoTarget+'Box');
-    if(box)box.innerHTML=`<img src="${data}">`;
+    if(box)box.innerHTML=`<img src="${data}">${photoTime?`<div class="photo-time">📷 ${esc(formatPhotoTime(photoTime))}</div>`:''}`;
   }catch(err){alert('照片读取失败：'+err.message)}
 });
 async function saveRecord(){
@@ -1195,8 +1273,8 @@ async function saveRecord(){
     if(!Number.isFinite(timestamp))throw new Error('日期或时间无效');
     const id=uid();
     const r={id,behaviorId:bId,date:d,timestamp,note:document.getElementById('rn').value.trim()};
-    if(pendingPhotos.before){r.before=id+':before';await savePhoto(r.before,pendingPhotos.before)}
-    if(pendingPhotos.after){r.after=id+':after';await savePhoto(r.after,pendingPhotos.after)}
+    if(pendingPhotos.before){r.before=id+':before';r.beforeTime=pendingPhotos.before.time||null;await savePhoto(r.before,pendingPhotos.before.data)}
+    if(pendingPhotos.after){r.after=id+':after';r.afterTime=pendingPhotos.after.time||null;await savePhoto(r.after,pendingPhotos.after.data)}
     db.records.push(r);
     await save();
     pendingPhotos={before:null,after:null};
