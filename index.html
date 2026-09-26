@@ -556,7 +556,7 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v25.0.0';
+const APP_VERSION='v26.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -604,6 +604,16 @@ function txPutAll(storeName,items){
     tx.onabort=()=>reject(tx.error||new Error('数据库写入被中止'));
   }));
 }
+function txReplaceAll(storeName,items){
+  return openIDB().then(d=>new Promise((resolve,reject)=>{
+    const tx=d.transaction(storeName,'readwrite'),s=tx.objectStore(storeName);
+    s.clear();
+    for(const item of items)s.put(item);
+    tx.oncomplete=()=>resolve();
+    tx.onerror=()=>reject(tx.error||new Error('数据库替换写入失败'));
+    tx.onabort=()=>reject(tx.error||new Error('数据库替换写入被中止'));
+  }));
+}
 function txDeleteAll(storeName){
   return openIDB().then(d=>new Promise((resolve,reject)=>{
     const tx=d.transaction(storeName,'readwrite');
@@ -614,7 +624,7 @@ function txDeleteAll(storeName){
   }));
 }
 
-// IndexedDB is the ONLY local data store for behaviors, records, photos and settings.
+// IndexedDB is the ONLY local data store for behaviors, records, photos and settings. Deletions are authoritative.
 // There is deliberately no localStorage data cache or merge layer.
 function dataSnapshot(){
   return {
@@ -703,8 +713,8 @@ async function initStorage(){
         ib=legacy.behaviors||[];
         ir=legacy.records||[];
         meta={value:legacy.settings||{}};
-        await txPutAll('behaviors',ib);
-        await txPutAll('records',ir);
+        await txReplaceAll('behaviors',ib);
+        await txReplaceAll('records',ir);
       }
     }else{
       // Remove the old fallback even when IndexedDB already contains data.
@@ -719,8 +729,8 @@ async function initStorage(){
     googleLoginHint=googleMeta?.value?.email||'';
 
     await normalizeRecords();
-    await txPutAll('behaviors',db.behaviors);
-    await txPutAll('records',db.records);
+    await txReplaceAll('behaviors',db.behaviors);
+    await txReplaceAll('records',db.records);
     await txPutAll('meta',[{key:'settings',value:db.settings}]);
     await loadPhotoStore();
   }catch(e){
@@ -734,9 +744,9 @@ async function initStorage(){
 async function save(){
   await normalizeRecords();
   db.settings={...(db.settings||{}),version:APP_VERSION};
-  // One IndexedDB transaction per store; no second local persistence layer.
-  await txPutAll('behaviors',db.behaviors);
-  await txPutAll('records',db.records);
+  // Behaviors and records are replaced atomically so deletions are persisted; no second local persistence layer.
+  await txReplaceAll('behaviors',db.behaviors);
+  await txReplaceAll('records',db.records);
   await txPutAll('meta',[{key:'settings',value:db.settings}]);
   await loadPhotoStore();
 }
@@ -1471,8 +1481,9 @@ async function driveDownload(){
     if(!confirm('将用 Google Drive 中的数据覆盖本机行为追踪数据吗？\n\n同步内容：行为、历史记录、设置以及前后照片。')){driveSetStatus('已连接 · 未覆盖本机数据','ok');syncProgress(0,'',false);return}
     syncProgress(35,'正在恢复行为与历史记录…');
     db={behaviors:data.data.behaviors||[],records:data.data.records||[],settings:{...(data.data.settings||{}),version:APP_VERSION}};
+    deletedRecordIds=new Set();
     await txDeleteAll('behaviors');await txDeleteAll('records');await txDeleteAll('photos');await txDeleteAll('meta');
-    await txPutAll('behaviors',db.behaviors);await txPutAll('records',db.records);await txPutAll('meta',[{key:'settings',value:db.settings}]);
+    await txReplaceAll('behaviors',db.behaviors);await txReplaceAll('records',db.records);await txPutAll('meta',[{key:'settings',value:db.settings}]);
     const photoMap=data.photos||{},entries=Object.entries(photoMap),total=Math.max(1,entries.length);
     for(let i=0;i<entries.length;i++){
       const [photoId,fileId]=entries[i];syncProgress(40+(i/total)*50,`正在恢复照片 ${i+1}/${total}…`);
