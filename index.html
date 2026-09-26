@@ -556,7 +556,7 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v22.0.0';
+const APP_VERSION='v23.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -1276,7 +1276,24 @@ async function saveRecord(){
     if(pendingPhotos.before){r.before=id+':before';r.beforeTime=pendingPhotos.before.time||null;await savePhoto(r.before,pendingPhotos.before.data)}
     if(pendingPhotos.after){r.after=id+':after';r.afterTime=pendingPhotos.after.time||null;await savePhoto(r.after,pendingPhotos.after.data)}
     db.records.push(r);
-    await save();
+      // Same behavior recorded again within 5 minutes: ask for confirmation.
+  const newRecordTime=Number(r.timestamp||Date.now());
+  const latestSame=(db.records||[])
+    .filter(x=>x.behaviorId===r.behaviorId && x.id!==r.id)
+    .sort((a,b)=>Number(b.timestamp||0)-Number(a.timestamp||0))[0];
+  if(latestSame){
+    const diff=Math.abs(newRecordTime-Number(latestSame.timestamp||0));
+    if(diff<5*60*1000){
+      const minutes=Math.floor(diff/60000);
+      const seconds=Math.floor((diff%60000)/1000);
+      const label=minutes?`${minutes}分钟${seconds}秒`:`${seconds}秒`;
+      const behaviorName=(db.behaviors||[]).find(b=>b.id===r.behaviorId)?.name||'该行为';
+      const ok=confirm(`「${behaviorName}」上一次记录仅在 ${label} 前。\n\n两次行为添加间隔少于 5 分钟，是否仍要继续记录？`);
+      if(!ok)return;
+    }
+  }
+
+await save();
     pendingPhotos={before:null,after:null};
     closeModal();
     render();
