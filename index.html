@@ -556,11 +556,12 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v23.0.0';
+const APP_VERSION='v24.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
 let photoCache=new Map();
+let deletedRecordIds=new Set();
 const COLORS=['#2563eb','#16a34a','#dc2626','#9333ea','#ea580c','#0891b2','#db2777','#65a30d','#7c3aed','#ca8a04'];
 let calYear=new Date().getFullYear(), calMonth=new Date().getMonth();
 let currentPage='today', selectedBehavior=null, photoTarget=null, historyFilter='all';
@@ -615,7 +616,7 @@ function txDeleteAll(storeName){
 
 const META_KEY='personal_behavior_tracker_metadata_v5';
 function localSnapshot(){
-  return {behaviors:db.behaviors||[],records:(db.records||[]).map(r=>{
+  return {deletedRecordIds:[...deletedRecordIds],behaviors:db.behaviors||[],records:(db.records||[]).map(r=>{
     const x={...r};
     // Photos are stored in IndexedDB; keep only their IDs in the durable metadata fallback.
     if(typeof x.before==='string'&&x.before.startsWith('data:'))delete x.before;
@@ -693,19 +694,22 @@ async function initStorage(){
   const fallback=readLocalFallback();
   if(fallback){
     db={behaviors:fallback.behaviors||[],records:fallback.records||[],settings:{...(fallback.settings||{}),version:APP_VERSION}};
+    deletedRecordIds=new Set(fallback.deletedRecordIds||[]);
   }
   try{
-    const [ib,ir,meta]=await Promise.all([
+    const [ib,ir,meta,deletedMeta]=await Promise.all([
       txReadAll('behaviors'),
       txReadAll('records'),
-      txRead('meta','settings')
+      txRead('meta','settings'),
+      txRead('meta','deletedRecordIds')
     ]);
     const indexed={behaviors:ib||[],records:ir||[],settings:meta?.value||{}};
+    if(Array.isArray(deletedMeta?.value)) for(const id of deletedMeta.value) deletedRecordIds.add(id);
 
     // Prefer the union of local fallback and IndexedDB. This protects against
     // a partially completed write or Safari restoring one storage layer first.
     db.behaviors=mergeById(indexed.behaviors,db.behaviors);
-    db.records=mergeById(indexed.records,db.records);
+    db.records=mergeById(indexed.records,db.records).filter(r=>!deletedRecordIds.has(r.id));
     db.settings={...indexed.settings,...(db.settings||{}),version:APP_VERSION};
 
     await normalizeRecords();
@@ -713,7 +717,7 @@ async function initStorage(){
     // Persist the merged state to both stores.
     await txPutAll('behaviors',db.behaviors);
     await txPutAll('records',db.records);
-    await txPutAll('meta',[{key:'settings',value:db.settings}]);
+    await txPutAll('meta',[{key:'settings',value:db.settings},{key:'deletedRecordIds',value:[...deletedRecordIds]}]);
     writeLocalFallback();
     await loadPhotoStore();
   }catch(e){
@@ -734,7 +738,7 @@ async function save(){
   await txPutAll('behaviors',db.behaviors);
   await txPutAll('records',db.records);
   db.settings={...(db.settings||{}),version:APP_VERSION};
-  await txPutAll('meta',[{key:'settings',value:db.settings}]);
+  await txPutAll('meta',[{key:'settings',value:db.settings},{key:'deletedRecordIds',value:[...deletedRecordIds]}]);
   writeLocalFallback();
   await loadPhotoStore();
 }
@@ -796,6 +800,7 @@ async function deleteRecord(id){
   const detailBehaviorId=r.behaviorId;
   try{
     db.records=db.records.filter(x=>x.id!==id);
+    deletedRecordIds.add(id);
     const ids=[r.before,r.after].filter(Boolean);
     if(ids.length){
       const d=await openIDB();
@@ -1272,6 +1277,7 @@ async function saveRecord(){
     const timestamp=new Date(`${d}T${t}`).getTime();
     if(!Number.isFinite(timestamp))throw new Error('日期或时间无效');
     const id=uid();
+    deletedRecordIds.delete(id);
     const r={id,behaviorId:bId,date:d,timestamp,note:document.getElementById('rn').value.trim()};
     if(pendingPhotos.before){r.before=id+':before';r.beforeTime=pendingPhotos.before.time||null;await savePhoto(r.before,pendingPhotos.before.data)}
     if(pendingPhotos.after){r.after=id+':after';r.afterTime=pendingPhotos.after.time||null;await savePhoto(r.after,pendingPhotos.after.data)}
@@ -1467,8 +1473,9 @@ async function driveDownload(){
     if(!confirm('将用 Google Drive 中的数据覆盖本机行为追踪数据吗？\n\n同步内容：行为、历史记录、设置以及前后照片。')){driveSetStatus('已连接 · 未覆盖本机数据','ok');syncProgress(0,'',false);return}
     syncProgress(35,'正在恢复行为与历史记录…');
     db={behaviors:data.data.behaviors||[],records:data.data.records||[],settings:{...(data.data.settings||{}),version:APP_VERSION}};
+    deletedRecordIds=new Set();
     await txDeleteAll('behaviors');await txDeleteAll('records');await txDeleteAll('photos');await txDeleteAll('meta');
-    await txPutAll('behaviors',db.behaviors);await txPutAll('records',db.records);await txPutAll('meta',[{key:'settings',value:db.settings}]);
+    await txPutAll('behaviors',db.behaviors);await txPutAll('records',db.records);await txPutAll('meta',[{key:'settings',value:db.settings},{key:'deletedRecordIds',value:[]}]);
     const photoMap=data.photos||{},entries=Object.entries(photoMap),total=Math.max(1,entries.length);
     for(let i=0;i<entries.length;i++){
       const [photoId,fileId]=entries[i];syncProgress(40+(i/total)*50,`正在恢复照片 ${i+1}/${total}…`);
