@@ -540,6 +540,16 @@ input:focus,select:focus,textarea:focus{
 <meta name="apple-mobile-web-app-title" content="个人行为记录">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
 
+
+function getBehaviorAverageWeeklyCount(behaviorId){
+  const ts=(db.records||[]).filter(r=>r.behaviorId===behaviorId&&Number.isFinite(Number(r.timestamp)))
+    .map(r=>Number(r.timestamp)).sort((a,b)=>a-b);
+  if(!ts.length)return 0;
+  if(ts.length===1)return 1;
+  const spanWeeks=Math.max((ts[ts.length-1]-ts[0])/(7*24*60*60*1000),1/7);
+  return ts.length/spanWeeks;
+}
+
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -558,7 +568,7 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v28.0.0';
+const APP_VERSION='v29.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -937,7 +947,7 @@ function recordHtml(r){
       </div>
     </div>`:
     `<div class="history-photo-entry">
-      <button type="button" class="photo-action-btn add-photo-entry" onclick="event.stopPropagation();chooseHistoryPhoto('${r.id}','before')">＋ 添加照片</button>
+      <button type="button" class="photo-action-btn add-photo-entry" onclick="event.stopPropagation();chooseHistoryPhoto('${r.id}','after')">＋ 添加照片</button>
     </div>`}
   </div>`;
 }
