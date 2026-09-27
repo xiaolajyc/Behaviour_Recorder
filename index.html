@@ -529,6 +529,7 @@ input:focus,select:focus,textarea:focus{
   background:#eef1f5;color:#4d5664;font-size:12px;font-weight:600;
 }
 .photo-edit-actions{display:flex;justify-content:center;gap:6px;margin-top:7px;flex-wrap:wrap}.photo-action-btn{border:0;border-radius:8px;padding:5px 9px;background:#eef1f5;color:#4d5664;font-size:11px;font-weight:600}.photo-action-btn.danger{color:#b42318;background:#fff0ee}.actions .primary.saving{opacity:.65;cursor:wait}.actions .primary:disabled{pointer-events:none}
+.history-photo-entry{margin-top:8px;text-align:right}.add-photo-entry{font-size:12px;padding:6px 10px}
 </style>
 
 <link rel="manifest" href="./manifest.json">
@@ -557,7 +558,7 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v27.0.0';
+const APP_VERSION='v28.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -912,6 +913,7 @@ function recordHtml(r){
       <div class="note" id="note-${r.id}">${r.note?esc(r.note):'<span class="empty-note">暂无备注</span>'}</div>
       <button type="button" class="note-edit-btn" onclick="event.stopPropagation();editRecordNote('${r.id}')">编辑</button>
     </div>
+    ${before||after?`
     <div class="compare-title">前后对比</div>
     <div class="photo-compare">
       <div class="compare-photo before-photo">
@@ -933,7 +935,10 @@ function recordHtml(r){
           ${after?`<button type="button" class="photo-action-btn danger" onclick="event.stopPropagation();removeHistoryPhoto('${r.id}','after')">删除</button>`:''}
         </div>
       </div>
-    </div>
+    </div>`:
+    `<div class="history-photo-entry">
+      <button type="button" class="photo-action-btn add-photo-entry" onclick="event.stopPropagation();chooseHistoryPhoto('${r.id}','before')">＋ 添加照片</button>
+    </div>`}
   </div>`;
 }
 function historyPage(){
