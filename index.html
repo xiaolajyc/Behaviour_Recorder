@@ -2,12 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#ffffff">
 <title>个人行为记录</title>
 <style>
 :root{--bg:#f5f6f8;--card:#fff;--text:#202124;--muted:#70757a;--line:#e5e7eb;--accent:#2563eb;--good:#16a34a;--warn:#d97706;--bad:#dc2626}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+*{box-sizing:border-box;touch-action:pan-x pan-y}html{touch-action:pan-x pan-y;overscroll-behavior:none}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 button,input,select,textarea{font:inherit}button{border:0;cursor:pointer}
 .app{max-width:900px;margin:auto;min-height:100vh;padding-bottom:78px}
 header{position:sticky;top:0;z-index:5;background:rgba(255,255,255,.94);backdrop-filter:blur(12px);padding:16px;border-bottom:1px solid var(--line)}
@@ -528,6 +528,7 @@ input:focus,select:focus,textarea:focus{
   flex:0 0 auto;border:0;border-radius:8px;padding:5px 9px;
   background:#eef1f5;color:#4d5664;font-size:12px;font-weight:600;
 }
+.photo-edit-actions{display:flex;justify-content:center;gap:6px;margin-top:7px;flex-wrap:wrap}.photo-action-btn{border:0;border-radius:8px;padding:5px 9px;background:#eef1f5;color:#4d5664;font-size:11px;font-weight:600}.photo-action-btn.danger{color:#b42318;background:#fff0ee}.actions .primary.saving{opacity:.65;cursor:wait}.actions .primary:disabled{pointer-events:none}
 </style>
 
 <link rel="manifest" href="./manifest.json">
@@ -556,7 +557,7 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v26.0.0';
+const APP_VERSION='v27.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -565,6 +566,7 @@ let googleLoginHint='';
 const COLORS=['#2563eb','#16a34a','#dc2626','#9333ea','#ea580c','#0891b2','#db2777','#65a30d','#7c3aed','#ca8a04'];
 let calYear=new Date().getFullYear(), calMonth=new Date().getMonth();
 let currentPage='today', selectedBehavior=null, photoTarget=null, historyFilter='all';
+let photoEditTarget=null,saveInProgress=false;
 
 function openIDB(){
   return new Promise((resolve,reject)=>{
@@ -787,6 +789,48 @@ function render(){
 }
 function behaviorCard(b){let c=countFor(b),t=+b.target||1,p=b.hasTarget?Math.min(100,c/t*100):0;return `<button class="behavior" style="--c:${color(b)}" onclick="openRecord('${b.id}')"><div class="icon">${esc(b.icon||'✓')}</div><div class="name">${esc(b.name)}</div><div class="small">${freqText(b)}</div>${b.hasTarget?`<div class="progress"><i style="width:${p}%;background:${color(b)}"></i></div><div class="small">${c>=t?'✓ 已达标':`已完成 ${c} / ${t}`}</div>`:`<div class="small" style="margin-top:14px">累计记录 ${c} 次</div>`}</button>`}
 function today(){let bs=activeBehaviors();if(!bs.length)return `<div class="empty">还没有行为。<br><br><button class="btn primary" onclick="openBehavior()">＋ 添加第一个行为</button></div>`;let cards=bs.map(behaviorCard).join('');let recent=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp).slice(0,8).map(recordHtml).join('');return `<div class="section"><div class="section-title">快速记录</div><div class="grid">${cards}</div></div><div class="section"><div class="section-title">最近记录</div>${recent||'<div class="empty">暂无记录</div>'}</div>`}
+function chooseHistoryPhoto(recordId,side){
+  photoEditTarget={recordId,side};
+  photoTarget=null;
+  const input=document.getElementById('photoInput');
+  if(!input)return;
+  input.value='';
+  input.click();
+}
+async function removeHistoryPhoto(recordId,side){
+  if(saveInProgress)return;
+  if(!confirm(`确定删除“${side==='before'?'之前':'之后'}”照片吗？`))return;
+  saveInProgress=true;
+  try{
+    const r=db.records.find(x=>x.id===recordId);
+    if(!r)return;
+    const oldId=r[side];
+    if(oldId){
+      const d=await openIDB();
+      await new Promise((resolve,reject)=>{
+        const tx=d.transaction('photos','readwrite');
+        tx.objectStore('photos').delete(oldId);
+        tx.oncomplete=resolve;
+        tx.onerror=()=>reject(tx.error||new Error('照片删除失败'));
+      });
+      const url=photoCache.get(oldId);
+      if(url)URL.revokeObjectURL(url);
+      photoCache.delete(oldId);
+    }
+    delete r[side]; delete r[side+'Time'];
+    await save(); render(); toast('照片已删除 ✓');
+  }catch(e){alert('照片删除失败：'+(e.message||e))}
+  finally{saveInProgress=false}
+}
+async function replaceHistoryPhoto(recordId,side,file){
+  const r=db.records.find(x=>x.id===recordId); if(!r)return;
+  const data=await fileToDataURL(file);
+  const photoTime=await getPhotoTakenTime(file);
+  const photoId=r[side]||(`${r.id}:${side}`);
+  await savePhoto(photoId,data);
+  r[side]=photoId; r[side+'Time']=photoTime||null;
+  await save(); await loadPhotoStore(); render(); toast('照片已保存 ✓');
+}
 async function editRecordNote(id){
   const r=(db.records||[]).find(x=>x.id===id);
   if(!r)return;
@@ -868,21 +912,28 @@ function recordHtml(r){
       <div class="note" id="note-${r.id}">${r.note?esc(r.note):'<span class="empty-note">暂无备注</span>'}</div>
       <button type="button" class="note-edit-btn" onclick="event.stopPropagation();editRecordNote('${r.id}')">编辑</button>
     </div>
-    ${(before||after)?`
-      <div class="compare-title">前后对比</div>
-      <div class="photo-compare">
-        <div class="compare-photo before-photo">
-          <div class="photo-label">之前</div>
-          ${before?`<img src="${before}" onclick="viewPhoto('${r.before}')" alt="之前">`:'<div class="no-photo">未添加</div>'}
-          ${before&&r.beforeTime?`<div class="photo-time">📷 ${esc(formatPhotoTime(r.beforeTime))}</div>`:''}
+    <div class="compare-title">前后对比</div>
+    <div class="photo-compare">
+      <div class="compare-photo before-photo">
+        <div class="photo-label">之前</div>
+        ${before?`<img src="${before}" onclick="viewPhoto('${r.before}')" alt="之前">`:'<div class="no-photo">未添加</div>'}
+        ${before&&r.beforeTime?`<div class="photo-time">📷 ${esc(formatPhotoTime(r.beforeTime))}</div>`:''}
+        <div class="photo-edit-actions">
+          <button type="button" class="photo-action-btn" onclick="event.stopPropagation();chooseHistoryPhoto('${r.id}','before')">${before?'更换':'添加'}</button>
+          ${before?`<button type="button" class="photo-action-btn danger" onclick="event.stopPropagation();removeHistoryPhoto('${r.id}','before')">删除</button>`:''}
         </div>
-        <div class="compare-arrow">→</div>
-        <div class="compare-photo after-photo">
-          <div class="photo-label">之后</div>
-          ${after?`<img src="${after}" onclick="viewPhoto('${r.after}')" alt="之后">`:'<div class="no-photo">未添加</div>'}
-          ${after&&r.afterTime?`<div class="photo-time">📷 ${esc(formatPhotoTime(r.afterTime))}</div>`:''}
+      </div>
+      <div class="compare-arrow">→</div>
+      <div class="compare-photo after-photo">
+        <div class="photo-label">之后</div>
+        ${after?`<img src="${after}" onclick="viewPhoto('${r.after}')" alt="之后">`:'<div class="no-photo">未添加</div>'}
+        ${after&&r.afterTime?`<div class="photo-time">📷 ${esc(formatPhotoTime(r.afterTime))}</div>`:''}
+        <div class="photo-edit-actions">
+          <button type="button" class="photo-action-btn" onclick="event.stopPropagation();chooseHistoryPhoto('${r.id}','after')">${after?'更换':'添加'}</button>
+          ${after?`<button type="button" class="photo-action-btn danger" onclick="event.stopPropagation();removeHistoryPhoto('${r.id}','after')">删除</button>`:''}
         </div>
-      </div>`:''}
+      </div>
+    </div>
   </div>`;
 }
 function historyPage(){
@@ -1268,48 +1319,52 @@ function openBehaviorDetail(id){
 document.getElementById('photoInput').addEventListener('change',async e=>{
   const f=e.target.files[0];if(!f)return;
   try{
+    if(photoEditTarget){
+      if(saveInProgress)return;
+      saveInProgress=true;
+      try{await replaceHistoryPhoto(photoEditTarget.recordId,photoEditTarget.side,f)}
+      finally{saveInProgress=false;photoEditTarget=null}
+      return;
+    }
     const data=await fileToDataURL(f);
     const photoTime=await getPhotoTakenTime(f);
     pendingPhotos[photoTarget]={data,time:photoTime};
     const box=document.getElementById(photoTarget+'Box');
     if(box)box.innerHTML=`<img src="${data}">${photoTime?`<div class="photo-time">📷 ${esc(formatPhotoTime(photoTime))}</div>`:''}`;
-  }catch(err){alert('照片读取失败：'+err.message)}
+  }catch(err){alert('照片处理失败：'+err.message)}
 });
 async function saveRecord(){
+  if(saveInProgress)return;
+  saveInProgress=true;
+  const btn=document.querySelector('#sheet .actions .primary');
+  if(btn){btn.disabled=true;btn.dataset.originalText=btn.textContent;btn.textContent='保存中…';btn.classList.add('saving')}
   try{
     const bId=document.getElementById('recordBehavior').value;
-    const d=document.getElementById('rd').value;
-    const t=document.getElementById('rt').value||'00:00';
+    const d=document.getElementById('rd').value,t=document.getElementById('rt').value||'00:00';
     if(!d){alert('请选择日期');return}
     const timestamp=new Date(`${d}T${t}`).getTime();
     if(!Number.isFinite(timestamp))throw new Error('日期或时间无效');
-    const id=uid();
-    const r={id,behaviorId:bId,date:d,timestamp,note:document.getElementById('rn').value.trim()};
+    const latestSame=(db.records||[]).filter(x=>x.behaviorId===bId).sort((a,b)=>Number(b.timestamp||0)-Number(a.timestamp||0))[0];
+    if(latestSame){
+      const diff=Math.abs(timestamp-Number(latestSame.timestamp||0));
+      if(diff<300000){
+        const mins=Math.floor(diff/60000),secs=Math.floor((diff%60000)/1000);
+        const label=mins?`${mins}分钟${secs}秒`:`${secs}秒`;
+        const name=(db.behaviors||[]).find(b=>b.id===bId)?.name||'该行为';
+        if(!confirm(`「${name}」上一次记录仅在 ${label} 前。\n\n两次行为添加间隔少于 5 分钟，是否仍要继续记录？`))return;
+      }
+    }
+    const id=uid(),r={id,behaviorId:bId,date:d,timestamp,note:document.getElementById('rn').value.trim()};
     if(pendingPhotos.before){r.before=id+':before';r.beforeTime=pendingPhotos.before.time||null;await savePhoto(r.before,pendingPhotos.before.data)}
     if(pendingPhotos.after){r.after=id+':after';r.afterTime=pendingPhotos.after.time||null;await savePhoto(r.after,pendingPhotos.after.data)}
-    db.records.push(r);
-      // Same behavior recorded again within 5 minutes: ask for confirmation.
-  const newRecordTime=Number(r.timestamp||Date.now());
-  const latestSame=(db.records||[])
-    .filter(x=>x.behaviorId===r.behaviorId && x.id!==r.id)
-    .sort((a,b)=>Number(b.timestamp||0)-Number(a.timestamp||0))[0];
-  if(latestSame){
-    const diff=Math.abs(newRecordTime-Number(latestSame.timestamp||0));
-    if(diff<5*60*1000){
-      const minutes=Math.floor(diff/60000);
-      const seconds=Math.floor((diff%60000)/1000);
-      const label=minutes?`${minutes}分钟${seconds}秒`:`${seconds}秒`;
-      const behaviorName=(db.behaviors||[]).find(b=>b.id===r.behaviorId)?.name||'该行为';
-      const ok=confirm(`「${behaviorName}」上一次记录仅在 ${label} 前。\n\n两次行为添加间隔少于 5 分钟，是否仍要继续记录？`);
-      if(!ok)return;
-    }
+    db.records.push(r); await save();
+    pendingPhotos={before:null,after:null}; closeModal(); render(); toast('记录已保存 ✓');
+  }catch(e){alert('保存记录失败：'+(e.message||e))}
+  finally{
+    saveInProgress=false;
+    const b=document.querySelector('#sheet .actions .primary');
+    if(b){b.disabled=false;b.textContent=b.dataset.originalText||'保存记录';b.classList.remove('saving')}
   }
-
-await save();
-    pendingPhotos={before:null,after:null};
-    closeModal();
-    render();
-  }catch(e){alert('保存记录失败：'+e.message)}
 }
 
 /* v11 Google Drive sync — same GIS + drive.file architecture used by TodoCalendar. */
@@ -1630,5 +1685,11 @@ if ('serviceWorker' in navigator) {
 }
 </script>
 
-</body>
+<script>
+document.addEventListener('gesturestart',e=>e.preventDefault(),{passive:false});
+document.addEventListener('gesturechange',e=>e.preventDefault(),{passive:false});
+document.addEventListener('gestureend',e=>e.preventDefault(),{passive:false});
+document.addEventListener('wheel',e=>{if(e.ctrlKey)e.preventDefault()},{passive:false});
+document.addEventListener('touchmove',e=>{if(e.touches&&e.touches.length>1)e.preventDefault()},{passive:false});
+</script></body>
 </html>
