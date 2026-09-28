@@ -530,7 +530,7 @@ input:focus,select:focus,textarea:focus{
 }
 .photo-edit-actions{display:flex;justify-content:center;gap:6px;margin-top:7px;flex-wrap:wrap}.photo-action-btn{border:0;border-radius:8px;padding:5px 9px;background:#eef1f5;color:#4d5664;font-size:11px;font-weight:600}.photo-action-btn.danger{color:#b42318;background:#fff0ee}.actions .primary.saving{opacity:.65;cursor:wait}.actions .primary:disabled{pointer-events:none}
 .history-photo-entry{margin-top:8px;text-align:right}.add-photo-entry{font-size:12px;padding:6px 10px}
-</style>
+.quick-order-btn{margin-left:8px;border:0;border-radius:10px;padding:5px 10px;background:#eef2f7;color:#1769e0;font-size:12px;font-weight:600}.quick-order-help{font-size:13px;color:#6b7280;margin:8px 0 12px}.quick-order-row{display:flex;align-items:center;gap:8px;padding:10px 4px;border-bottom:1px solid #eee}.quick-order-handle{color:#999;font-size:18px}.quick-order-name{flex:1;font-weight:600}.quick-order-row button{min-width:36px;height:34px;border:0;border-radius:8px;background:#f1f3f5;font-size:18px}.quick-order-row button:disabled{opacity:.3}</style>
 
 <link rel="manifest" href="./manifest.json">
 <meta name="theme-color" content="#f4f6fb">
@@ -558,7 +558,7 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v30.0.0';
+const APP_VERSION='v31.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -567,7 +567,49 @@ let googleLoginHint='';
 const COLORS=['#2563eb','#16a34a','#dc2626','#9333ea','#ea580c','#0891b2','#db2777','#65a30d','#7c3aed','#ca8a04'];
 let calYear=new Date().getFullYear(), calMonth=new Date().getMonth();
 let currentPage='today', selectedBehavior=null, photoTarget=null, historyFilter='all';
+let quickBehaviorOrder=[];
 let photoEditTarget=null,saveInProgress=false;
+
+
+function getQuickBehaviors(){
+  const list=[...(db.behaviors||[])];
+  const ids=new Set(list.map(b=>b.id));
+  const saved=Array.isArray(db.quickBehaviorOrder)?db.quickBehaviorOrder.filter(id=>ids.has(id)):[];
+  const rest=list.filter(b=>!saved.includes(b.id)).map(b=>b.id);
+  quickBehaviorOrder=[...saved,...rest];
+  db.quickBehaviorOrder=quickBehaviorOrder.slice();
+  const byId=new Map(list.map(b=>[b.id,b]));
+  return quickBehaviorOrder.map(id=>byId.get(id)).filter(Boolean);
+}
+async function saveQuickBehaviorOrder(){
+  db.quickBehaviorOrder=quickBehaviorOrder.slice();
+  await save();
+}
+function openQuickOrderEditor(){
+  const list=getQuickBehaviors();
+  const body=list.map((b,i)=>`
+    <div class="quick-order-row">
+      <span class="quick-order-handle">☷</span>
+      <span class="quick-order-name">${esc(b.icon||'')} ${esc(b.name)}</span>
+      <button type="button" onclick="moveQuickBehavior('${b.id}',-1)" ${i===0?'disabled':''}>↑</button>
+      <button type="button" onclick="moveQuickBehavior('${b.id}',1)" ${i===list.length-1?'disabled':''}>↓</button>
+    </div>`).join('');
+  showModal(`<div class="modal-title">快速记录顺序</div>
+    <div class="quick-order-help">调整后会保存，刷新应用后顺序仍会保留。</div>
+    <div id="quickOrderList">${body}</div>
+    <div class="modal-actions"><button onclick="closeModal()">完成</button></div>`);
+}
+async function moveQuickBehavior(id,delta){
+  const list=getQuickBehaviors();
+  const i=list.findIndex(b=>b.id===id), j=i+delta;
+  if(i<0||j<0||j>=list.length)return;
+  const ids=list.map(b=>b.id);
+  [ids[i],ids[j]]=[ids[j],ids[i]];
+  quickBehaviorOrder=ids;
+  await saveQuickBehaviorOrder();
+  openQuickOrderEditor();
+  render();
+}
 
 function openIDB(){
   return new Promise((resolve,reject)=>{
