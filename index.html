@@ -530,7 +530,7 @@ input:focus,select:focus,textarea:focus{
 }
 .photo-edit-actions{display:flex;justify-content:center;gap:6px;margin-top:7px;flex-wrap:wrap}.photo-action-btn{border:0;border-radius:8px;padding:5px 9px;background:#eef1f5;color:#4d5664;font-size:11px;font-weight:600}.photo-action-btn.danger{color:#b42318;background:#fff0ee}.actions .primary.saving{opacity:.65;cursor:wait}.actions .primary:disabled{pointer-events:none}
 .history-photo-entry{margin-top:8px;text-align:right}.add-photo-entry{font-size:12px;padding:6px 10px}
-.quick-order-btn{margin-left:8px;border:0;border-radius:10px;padding:5px 10px;background:#eef2f7;color:#1769e0;font-size:12px;font-weight:600}.quick-order-help{font-size:13px;color:#6b7280;margin:8px 0 12px}.quick-order-row{display:flex;align-items:center;gap:8px;padding:10px 4px;border-bottom:1px solid #eee}.quick-order-handle{color:#999;font-size:18px}.quick-order-name{flex:1;font-weight:600}.quick-order-row button{min-width:36px;height:34px;border:0;border-radius:8px;background:#f1f3f5;font-size:18px}.quick-order-row button:disabled{opacity:.3}</style>
+.quick-section-title{display:flex;align-items:center;justify-content:space-between}.quick-order-btn{margin-left:8px;border:0;border-radius:10px;padding:5px 10px;background:#eef2f7;color:#1769e0;font-size:12px;font-weight:600}.quick-order-help{font-size:13px;color:#6b7280;margin:8px 0 12px}.quick-order-row{display:flex;align-items:center;gap:8px;padding:10px 4px;border-bottom:1px solid #eee}.quick-order-handle{color:#999;font-size:18px}.quick-order-name{flex:1;font-weight:600}.quick-order-row button{min-width:36px;height:34px;border:0;border-radius:8px;background:#f1f3f5;font-size:18px}.quick-order-row button:disabled{opacity:.3}</style>
 
 <link rel="manifest" href="./manifest.json">
 <meta name="theme-color" content="#f4f6fb">
@@ -558,7 +558,7 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v31.0.0';
+const APP_VERSION='v32.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -831,7 +831,7 @@ function render(){
   else if(currentPage==='settings')m.innerHTML=settingsPage();
 }
 function behaviorCard(b){let c=countFor(b),t=+b.target||1,p=b.hasTarget?Math.min(100,c/t*100):0;return `<button class="behavior" style="--c:${color(b)}" onclick="openRecord('${b.id}')"><div class="icon">${esc(b.icon||'✓')}</div><div class="name">${esc(b.name)}</div><div class="small">${freqText(b)}</div>${b.hasTarget?`<div class="progress"><i style="width:${p}%;background:${color(b)}"></i></div><div class="small">${c>=t?'✓ 已达标':`已完成 ${c} / ${t}`}</div>`:`<div class="small" style="margin-top:14px">累计记录 ${c} 次</div>`}</button>`}
-function today(){let bs=activeBehaviors();if(!bs.length)return `<div class="empty">还没有行为。<br><br><button class="btn primary" onclick="openBehavior()">＋ 添加第一个行为</button></div>`;let cards=bs.map(behaviorCard).join('');let recent=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp).slice(0,8).map(recordHtml).join('');return `<div class="section"><div class="section-title">快速记录</div><div class="grid">${cards}</div></div><div class="section"><div class="section-title">最近记录</div>${recent||'<div class="empty">暂无记录</div>'}</div>`}
+function today(){let bs=getQuickBehaviors().filter(b=>!b.archived);if(!bs.length)return `<div class="empty">还没有行为。<br><br><button class="btn primary" onclick="openBehavior()">＋ 添加第一个行为</button></div>`;let cards=bs.map(behaviorCard).join('');let recent=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp).slice(0,8).map(recordHtml).join('');return `<div class="section"><div class="section-title quick-section-title"><span>快速记录</span><button type="button" class="quick-order-btn" onclick="openQuickOrderEditor()">排序</button></div><div class="grid">${cards}</div></div><div class="section"><div class="section-title">最近记录</div>${recent||'<div class="empty">暂无记录</div>'}</div>`}
 function chooseHistoryPhoto(recordId,side){
   photoEditTarget={recordId,side};
   photoTarget=null;
