@@ -558,7 +558,7 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v32.0.0';
+const APP_VERSION='v33.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -574,15 +574,17 @@ let photoEditTarget=null,saveInProgress=false;
 function getQuickBehaviors(){
   const list=[...(db.behaviors||[])];
   const ids=new Set(list.map(b=>b.id));
-  const saved=Array.isArray(db.quickBehaviorOrder)?db.quickBehaviorOrder.filter(id=>ids.has(id)):[];
+  const saved=Array.isArray(db.settings?.quickBehaviorOrder)
+    ? db.settings.quickBehaviorOrder.filter(id=>ids.has(id))
+    : [];
   const rest=list.filter(b=>!saved.includes(b.id)).map(b=>b.id);
   quickBehaviorOrder=[...saved,...rest];
-  db.quickBehaviorOrder=quickBehaviorOrder.slice();
+  db.settings={...(db.settings||{}),quickBehaviorOrder:quickBehaviorOrder.slice()};
   const byId=new Map(list.map(b=>[b.id,b]));
   return quickBehaviorOrder.map(id=>byId.get(id)).filter(Boolean);
 }
 async function saveQuickBehaviorOrder(){
-  db.quickBehaviorOrder=quickBehaviorOrder.slice();
+  db.settings={...(db.settings||{}),quickBehaviorOrder:quickBehaviorOrder.slice()};
   await save();
 }
 function openQuickOrderEditor(){
@@ -594,7 +596,7 @@ function openQuickOrderEditor(){
       <button type="button" onclick="moveQuickBehavior('${b.id}',-1)" ${i===0?'disabled':''}>↑</button>
       <button type="button" onclick="moveQuickBehavior('${b.id}',1)" ${i===list.length-1?'disabled':''}>↓</button>
     </div>`).join('');
-  showModal(`<div class="modal-title">快速记录顺序</div>
+  openModal(`<div class="modal-title">快速记录顺序</div>
     <div class="quick-order-help">调整后会保存，刷新应用后顺序仍会保留。</div>
     <div id="quickOrderList">${body}</div>
     <div class="modal-actions"><button onclick="closeModal()">完成</button></div>`);
@@ -831,7 +833,7 @@ function render(){
   else if(currentPage==='settings')m.innerHTML=settingsPage();
 }
 function behaviorCard(b){let c=countFor(b),t=+b.target||1,p=b.hasTarget?Math.min(100,c/t*100):0;return `<button class="behavior" style="--c:${color(b)}" onclick="openRecord('${b.id}')"><div class="icon">${esc(b.icon||'✓')}</div><div class="name">${esc(b.name)}</div><div class="small">${freqText(b)}</div>${b.hasTarget?`<div class="progress"><i style="width:${p}%;background:${color(b)}"></i></div><div class="small">${c>=t?'✓ 已达标':`已完成 ${c} / ${t}`}</div>`:`<div class="small" style="margin-top:14px">累计记录 ${c} 次</div>`}</button>`}
-function today(){let bs=getQuickBehaviors().filter(b=>!b.archived);if(!bs.length)return `<div class="empty">还没有行为。<br><br><button class="btn primary" onclick="openBehavior()">＋ 添加第一个行为</button></div>`;let cards=bs.map(behaviorCard).join('');let recent=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp).slice(0,8).map(recordHtml).join('');return `<div class="section"><div class="section-title quick-section-title"><span>快速记录</span><button type="button" class="quick-order-btn" onclick="openQuickOrderEditor()">排序</button></div><div class="grid">${cards}</div></div><div class="section"><div class="section-title">最近记录</div>${recent||'<div class="empty">暂无记录</div>'}</div>`}
+function today(){let bs=getQuickBehaviors().filter(b=>!b.archived);if(!bs.length)return `<div class="empty">还没有行为。<br><br><button class="btn primary" onclick="openBehavior()">＋ 添加第一个行为</button></div>`;let cards=bs.map(behaviorCard).join('');let recent=db.records.slice().sort((a,b)=>b.timestamp-a.timestamp).slice(0,8).map(recordHtml).join('');return `<div class="section"><div class="section-title quick-section-title"><span>快速记录</span><button type="button" class="quick-order-btn" onclick="event.stopPropagation();openQuickOrderEditor()">排序</button></div><div class="grid">${cards}</div></div><div class="section"><div class="section-title">最近记录</div>${recent||'<div class="empty">暂无记录</div>'}</div>`}
 function chooseHistoryPhoto(recordId,side){
   photoEditTarget={recordId,side};
   photoTarget=null;
@@ -1321,6 +1323,22 @@ function stats(){
  <div style="margin-top:18px">${bs.map(b=>`<div class="card" style="border-left:4px solid ${color(b)}"><div class="row between"><b>${esc(b.icon||'✓')} ${esc(b.name)}</b><button class="btn" onclick="openBehaviorDetail('${b.id}')">详情</button></div><div class="small" style="margin-top:6px">${freqText(b)} · 累计 ${db.records.filter(r=>r.behaviorId===b.id).length} 次 · 平均每周 ${getBehaviorAverageWeeklyCount(b.id).toFixed(1)} 次</div></div>`).join('')}</div>`
 }
 function behaviors(){let list=db.behaviors.map(b=>`<div class="card" style="border-left:4px solid ${color(b)};opacity:${b.archived?.55:1}"><div class="row"><span style="font-size:26px">${esc(b.icon||'✓')}</span><div style="flex:1"><b>${esc(b.name)}</b><div class="small">${freqText(b)} · ${b.photo?'可添加照片':'无照片要求'}</div></div><button class="btn" onclick="openBehaviorDetail('${b.id}')">详情</button><button class="btn" onclick="openBehavior('${b.id}')">编辑</button></div></div>`).join('');return `<div class="row between" style="margin-bottom:12px"><div class="section-title" style="margin:0">我的行为</div><div class="row"><button class="btn" onclick="page('settings')">⚙️ 设置</button><button class="btn primary" onclick="openBehavior()">＋ 添加</button></div></div>${list||'<div class="empty">还没有创建行为</div>'}`}
+
+async function forceUpdatePWA(){
+  try{
+    if(!('serviceWorker' in navigator)){location.reload();return;}
+    const reg=await navigator.serviceWorker.getRegistration('./');
+    if(reg) await reg.update();
+    if(reg?.waiting){
+      reg.waiting.postMessage({type:'SKIP_WAITING'});
+      return;
+    }
+    location.reload();
+  }catch(e){
+    location.reload();
+  }
+}
+
 function settingsPage(){
  const ds=driveTokenValid()?(driveFileId?'已连接 · 已找到云端数据':'已连接 · 尚未创建云端数据'):'未连接';
  const dc=driveTokenValid()?'drive-connected':'';
@@ -1335,7 +1353,7 @@ function settingsPage(){
    <div id="syncProgress" class="sync-progress"><div class="sync-progress-track"><div id="syncBar" class="sync-progress-bar"></div></div><div class="sync-progress-text"><span id="syncText">准备同步…</span><span id="syncPct">0%</span></div></div>
    <div class="small" style="margin-top:9px">与 TodoCalendar 使用相同的 Google Identity Services + Drive API + drive.file 方案。<div class="google-sync-note">首次连接选择一次 Google 账号即可；之后会优先静默恢复授权。只有 Google 登录状态/授权已失效时才需要再次确认。</div>同步行为、历史记录、设置以及前后照片。</div>
  </div>
- <div class="card"><b>版本信息</b><div class="small" style="margin-top:8px">当前版本：${APP_VERSION}<br>数据结构：IndexedDB v5 + 本地元数据备份<br>更新内容：Google Drive 多设备同步、照片同步、历史记录、月度趋势、年度对比。</div></div>`
+ <div class="card"><b>版本信息</b><div class="small" style="margin-top:8px">当前版本：${APP_VERSION}<br>数据结构：IndexedDB v5 + 本地元数据备份<br>更新内容：Google Drive 多设备同步、照片同步、历史记录、月度趋势、年度对比。<button type="button" class="quick-order-btn" onclick="forceUpdatePWA()">检查并更新应用</button></div></div>`
 }
 function behaviorDetail(id){
  let b=db.behaviors.find(x=>x.id===id);if(!b)return '';
