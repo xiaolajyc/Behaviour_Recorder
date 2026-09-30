@@ -558,7 +558,7 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v33.0.0';
+const APP_VERSION='v34.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -872,9 +872,20 @@ async function replaceHistoryPhoto(recordId,side,file){
   const data=await fileToDataURL(file);
   const photoTime=await getPhotoTakenTime(file);
   const photoId=r[side]||(`${r.id}:${side}`);
+
   await savePhoto(photoId,data);
-  r[side]=photoId; r[side+'Time']=photoTime||null;
-  await save(); await loadPhotoStore(); render(); toast('照片已保存 ✓');
+  r[side]=photoId;
+  r[side+'Time']=photoTime||null;
+  await save();
+  await loadPhotoStore();
+
+  // 详情页是弹窗，普通 render() 只刷新主页面，不能刷新当前详情弹窗。
+  if(selectedBehavior===r.behaviorId && typeof behaviorDetail==='function'){
+    openModal(behaviorDetail(r.behaviorId));
+  }else{
+    render();
+  }
+  toast('照片已保存 ✓');
 }
 async function editRecordNote(id){
   const r=(db.records||[]).find(x=>x.id===id);
