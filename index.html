@@ -558,7 +558,7 @@ input:focus,select:focus,textarea:focus{
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <input id="photoInput" type="file" accept="image/*" hidden>
 <script>
-const APP_VERSION='v34.0.0';
+const APP_VERSION='v35.0.0';
 const IDB_NAME='personal_behavior_tracker_v5';
 const DB_VERSION=1;
 let db={behaviors:[],records:[],settings:{version:APP_VERSION}};
@@ -673,6 +673,9 @@ function txDeleteAll(storeName){
 
 // IndexedDB is the ONLY local data store for behaviors, records, photos and settings. Deletions are authoritative.
 // There is deliberately no localStorage data cache or merge layer.
+// Compatibility shim: legacy Google Drive code may call this after restore.
+// IndexedDB is the sole local persistence layer, so no localStorage fallback is used.
+function writeLocalFallback(){ return Promise.resolve(); }
 function dataSnapshot(){
   return {
     behaviors:db.behaviors||[],
@@ -1629,7 +1632,7 @@ async function driveDownload(){
       const [photoId,fileId]=entries[i];syncProgress(40+(i/total)*50,`正在恢复照片 ${i+1}/${total}…`);
       try{const pr=await driveFetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(fileId)+'?alt=media');const blob=await pr.blob();await txPutAll('photos',[{id:photoId,blob}]);}catch(e){console.warn('照片恢复失败',photoId,e)}
     }
-    writeLocalFallback();await loadPhotoStore();render();syncProgress(96,'正在刷新应用…');driveSetStatus('已从 Google Drive 恢复 · '+new Date().toLocaleString(),'ok');syncProgress(100,'恢复完成');try{toast('云端数据已恢复 ✓')}catch(_e){}setTimeout(()=>syncProgress(0,'',false),1200);
+    await loadPhotoStore();render();syncProgress(96,'正在刷新应用…');driveSetStatus('已从 Google Drive 恢复 · '+new Date().toLocaleString(),'ok');syncProgress(100,'恢复完成');try{toast('云端数据已恢复 ✓')}catch(_e){}setTimeout(()=>syncProgress(0,'',false),1200);
   }catch(e){driveSetStatus('同步失败：'+(e.message||e),'error');syncProgress(0,'',false);alert('Google Drive 恢复失败：'+(e.message||e))}
   finally{driveBusy=false}
 }

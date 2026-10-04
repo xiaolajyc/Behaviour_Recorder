@@ -3,7 +3,7 @@
   "short_name": "行为记录",
   "description": "个人行为记录",
   "lang": "zh-CN",
-  "start_url": "./index.html?v=34.0.0",
+  "start_url": "./index.html?v=35.0.0",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
